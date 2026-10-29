@@ -94,6 +94,8 @@ def test_same_serial_text_in_different_explicit_namespaces_is_distinct():
 
 
 def test_serial_comparison_is_exact_and_case_sensitive():
+    # This is a sanity check that the SerialNumber class does not silently normalize or ignore case.
+    assert SerialNumber("EXAMPLE", "abc") == SerialNumber("EXAMPLE", "abc")
     assert SerialNumber("EXAMPLE", "abc") != SerialNumber("EXAMPLE", "ABC")
 
 
