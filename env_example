@@ -1,0 +1,2 @@
+DATABASE_URL=postgresql+psycopg://maas:dev_password@localhost:5432/maas_ua_dev
+FLASK_DEBUG=1

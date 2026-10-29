@@ -1,0 +1,287 @@
+# MAAS-UA — Domain Model (Working Draft)
+
+**Status:** Working draft, based on architecture discussions; not a complete or legally validated accounting specification.  
+**Scope:** Military material assets, initially FPV drones, reusable unmanned aircraft complexes (БпАК), replacement parts and accessories.  
+**Goal:** Support individually traceable and quantity-based accounting, monetary reconciliation and document-backed historical reporting.  
+**Language:** English for code-oriented documentation; retain Ukrainian accounting terms where precision matters.
+
+## 1. Why this system exists
+
+The primary business question is:
+
+> As of a selected reporting date, which concrete items, quantities and monetary values make up each accounting balance; where are they, who is responsible, how were they received, what happened to them, and which documents support each change?
+
+The application should allow drill-down from total value by subaccount / funding program / КЕКВ (КЕКВ, code of economic expenditure classification) / source of receipt, to nomenclature, physical unit or quantity-tracked stock, and ultimately to historical operations and supporting documents.
+
+Two related but distinct ledgers must be reconciled:
+
+- **Property / custody accounting:** identities, quantities, technical/operational condition, custody, location, physical movement, write-off.
+- **Financial accounting:** recognition, account/subaccount, amount, acquisition and carrying values, depreciation, economic classifications, accounting documents and postings.
+
+A physical transfer may have no change in overall carrying value; depreciation may change carrying value without moving an item. Do not conflate these processes.
+
+## 2. Confirmed facts and decisions
+
+The following reflect the current conversation and are suitable as **modeling requirements**, subject to validation against approved documents and applicable regulations:
+
+1. The initial area is UAV-related property managed by an aviation / air-defense property service.
+2. Reusable БпАК are accounted for as **fixed assets** with depreciation. FPV drones, spare parts and components are accounted for as **inventory / supplies**. Classification rules for specific items require validation.
+3. Both FPV drones and reusable БпАК are tracked **per physical unit by a serial number**.
+4. A supplier may provide the serial number. If absent, authorized property-accounting personnel assign an internal serial number, possibly using an organizational prefix and an incrementing suffix.
+5. Receipt source can vary: centralized procurement / supply, defense procurement agency, charitable assistance, transfer from another military unit, etc.
+6. A single incoming document (invoice or acceptance-transfer act) can contain a homogeneous line of FPV drones. **Every unit in that homogeneous line has an identical accounting unit cost.**
+7. Transfers and write-offs identify specific units by serial number. The historical identity and original receipt must remain recoverable.
+8. Reporting must show quantity, acquisition and (where applicable) residual value, account analytics, acquisition source, current condition, custody and location, and documentation of movements/write-offs.
+9. Some spare parts and small consumables may not need serial-level tracking; the policy is not yet confirmed per nomenclature.
+
+## 3. Domain vocabulary
+
+| Term | Meaning | Modeling role |
+|---|---|---|
+| `Nomenclature` | Catalog definition of a type/model of property, e.g. a particular FPV drone or antenna | Reference entity |
+| `ReceiptDocument` | One receipt-supporting document (invoice / acceptance-transfer act) | Candidate aggregate root |
+| `ReceiptLine` | A homogeneous line in a receipt: nomenclature, quantity, identical unit cost, relevant provenance/analytics | Entity inside receipt aggregate; initial origin grouping |
+| `AssetUnit` | A single physical object with individual identification, such as one FPV drone or БпАК | Candidate aggregate root |
+| `SerialNumber` | Supplier-issued or internally assigned identifier used by the service to identify a physical unit | Business identifier / possible value object |
+| `MovementDocument` | Document authorizing and recording transfer, issuance, return, or other movement | Candidate aggregate root |
+| `AssetMovement` | Dated historical record of one unit's movement/change in custody or status | Historical fact tied to a document |
+| `StockPosition` | Quantity and monetary valuation for inventory that is not serialized, broken down by required dimensions | Domain projection or aggregate to be determined |
+| `FixedAssetAccounting` | Specific financial attributes of an individually tracked fixed asset | Separate accounting model; boundary TBD |
+| `AccountingDocument`, `JournalEntry`, `PostingLine` | Financial-document and posting concepts | Separate accounting aggregate(s), TBD |
+| `AccountingDimensions` | Subaccount, program, КЕКВ, acquisition source, other analytical codes | Referenced codes/dimensions, often effective at operation time |
+| `Money`, `Quantity`, `DocumentReference`, `AccountingPeriod` | Immutable meaningful values with validation | Value objects |
+
+`ReceiptLine` provisionally replaces an additional `InventoryLot` entity for the first use case: it already represents the homogeneous origin group and price. Introduce a distinct lot only if a real scenario requires lot identity or life cycle independent of the receipt line.
+
+## 4. Conceptual relationship model
+
+```mermaid
+flowchart TD
+    N[Nomenclature] --> RL[ReceiptLine]
+    RD[ReceiptDocument] --> RL
+    RL --> AU[AssetUnit — serial-tracked]
+    RL --> SP[StockPosition — quantity-tracked, if applicable]
+    AU --> AM[AssetMovement history]
+    MD[MovementDocument] --> AM
+    AU --> FAC[FixedAssetAccounting — for fixed assets]
+    RD -. supports .-> AD[Accounting Documents / Posting]
+    MD -. may trigger .-> AD
+    AD --> AR[Balance & reconciliation reporting]
+    AM --> AR
+    SP --> AR
+    FAC --> AR
+```
+
+Relationships express intent, **not final table cardinalities, lifecycle ownership, or aggregate boundaries**. The domain must support a receipt with multiple lines. A line may be serial-tracked or quantity-tracked depending on the nomenclature policy.
+
+### Why no PostgreSQL array of serial numbers?
+
+A list/JSON array on a receipt might look simple, but makes per-unit uniqueness, custody, transfers, concurrency, write-off history and audit queries unnecessarily difficult. A serial-tracked unit needs its own persistent identity and relationship to its immutable receipt origin. **Moving or writing off a unit never removes it from the original receipt.**
+
+## 5. Tracking modes
+
+### 5.1 Serial-tracked property
+
+Examples: FPV drones and reusable БпАК.
+
+- Store **one `AssetUnit` per physical unit**.
+- Use internal immutable ID (UUID or comparable surrogate key); *do not* use serial number as the database PK.
+- Store serial number with issuer/namespace or origin information sufficient to apply an agreed uniqueness rule.
+- Keep link to original `ReceiptLine`, which carries original accounting unit price and provenance.
+- Track movements and lifecycle history via referenced, dated, document-backed records.
+- Preserve written-off units in queries and audit history.
+
+### 5.2 Quantity-tracked property
+
+Examples potentially include non-serialized cables, connectors and minor spare parts.
+
+- Track by nomenclature, source/origin grouping, valuation, location, custody and necessary accounting analytics.
+- Manage quantities through dated receipt/issue/transfer/write-off movements, not by overwriting a historical initial quantity.
+- Define valuation for issues across differing receipt prices *before* implementing fungible stock allocation (specific identification, FIFO, weighted average, or another officially approved method). **No method is approved yet.**
+- Support units of measure and avoid combining incompatible units.
+
+A nomenclature item should have an explicit **tracking policy** (`SERIALIZED` or `QUANTITY`) where approved. Do not assume all components are individually tracked merely because drones are.
+
+## 6. Receipt model and example
+
+**Illustrative synthetic scenario** — one document receives 27 identical FPV drones of nomenclature “Kolibri”; 27 unique serial identifiers; one accounting unit price.
+
+```text
+ReceiptDocument
+  document_number: EXAMPLE-125
+  document_date: 2026-01-15
+  source: CHARITABLE_ASSISTANCE [illustrative]
+  lines:
+    - ReceiptLine
+        nomenclature: FPV_KOLIBRI
+        quantity: 27 pcs
+        unit_price: UAH 14_500.00
+        line_total: UAH 391_500.00
+        asset_units:
+          - AssetUnit(id=..., serial=EXAMPLE-FPV-0001)
+          - AssetUnit(id=..., serial=EXAMPLE-FPV-0002)
+          - ... 25 more
+```
+
+These labels, amounts, dates and serials are **synthetic** and are not real unit records.
+
+### Candidate receipt invariants
+
+- Quantity must be positive and compatible with nomenclature tracking policy.
+- For a serialized line, number of distinct registered units must equal the line quantity **at posting**, subject to any approved exception workflow.
+- An individually tracked physical unit has one immutable internal ID and one original receipt link.
+- Duplicate serial identifiers within the receipt's applicable uniqueness namespace are rejected.
+- `line_total = quantity × unit_price` under an explicit currency/rounding rule for this homogeneous-price scenario.
+- A posted receipt cannot be silently edited to erase original quantity/price/provenance. Corrections require a defined, auditable amendment or reversal workflow.
+- On failed posting, no partial units/receipt are committed.
+
+**Not yet decided:** whether draft receipts may be stored partially before all serial numbers are captured; allowed correction/reversal workflow; when and how postings are generated; namespace-wide serial uniqueness rules.
+
+## 7. Identity and serial numbering
+
+Because some supplier serials may be absent and internally assigned numbers include prefixes, use a dedicated serial-number allocation/validation policy.
+
+Recommended split:
+
+- `AssetUnit.id`: system identity; immutable.
+- `AssetUnit.serial_number`: human/business lookup key.
+- `serial_origin`: `MANUFACTURER` / `SUPPLIER` / `INTERNAL` or another confirmed classification.
+- `serial_namespace` / `issuer`: only if needed for correct uniqueness and disambiguation.
+
+**Open issue:** Are supplier serial numbers globally unique in the service's actual data? If not, define uniqueness as a composite (issuer + normalized serial), or another business-approved scheme. An internal sequence may require PostgreSQL-controlled allocation to avoid concurrent duplicates. Always enforce the final uniqueness rule in the database as well as validating it in domain/services.
+
+Documented serial corrections should preserve an audit trail; do not silently reuse identities.
+
+## 8. State is multidimensional
+
+Avoid one catch-all `AssetStatus` enum. Distinguish at least:
+
+| Dimension | Questions answered | Examples (not approved enum values) |
+|---|---|---|
+| Accounting classification | What kind of accounting item? | Fixed asset / inventory |
+| Recognition | Where is value recognized? | On-balance / off-balance |
+| Condition | In what technical condition? | Serviceable / needs repair |
+| Operational/lifecycle state | Is it stored, issued, repaired, written off? | Storage / in use / repair / disposed |
+| Location | Where is it held? | Warehouse / organizational unit |
+| Custody | Who is responsible? | Custodian / responsible person |
+| Origin | How did the item arrive? | Central supply / donation / transfer |
+| Accounting dimensions | How is its value categorized? | Subaccount, program, КЕКВ |
+
+Some dimensions are **time-dependent accounting attributes of operations**, not intrinsic or permanently mutable properties of the physical unit. For an as-of report, reconstruct or query the state at that date. Decide whether current state is a materialized projection maintained transactionally or derived from movement history; retain source-of-truth records either way.
+
+## 9. Different accounting treatments
+
+### Inventory (including FPV drones)
+
+- Acquisition/receipt establishes initial valuation and provenance.
+- Serial-tracked FPV drones remain individually identifiable through issuance, transfer, and eventual write-off.
+- Inventory issue, physical use, and accounting write-off are **separate concepts** until official rules establish when they coincide.
+- Quantity-tracked stock uses a distinct balance/movement mechanism.
+
+### Fixed assets (reusable БпАК)
+
+- Individually identified `AssetUnit`, associated fixed-asset-specific accounting data.
+- Initial cost, depreciation policy, accumulated depreciation, carrying/residual amount and reporting periods.
+- Depreciation changes financial carrying values, **not** physical location.
+- Do not assume depreciation parameters or journal mappings until validated.
+
+A single common `AssetUnit` identity with separate `FixedAssetAccounting` behavior avoids two unrelated identity schemes. Avoid placing all accounting fields as nullable attributes on every unit.
+
+## 10. Documents, history and auditability
+
+- Receipt, movement, issuance, return, repair, write-off, adjustment and financial posting should be distinguishable operations as business rules emerge.
+- Every committed movement or write-off must reference an appropriate document/authorization under approved procedure.
+- Store meaningful dates (document date, effective date, timestamp entered), user identity where permitted, references, and justifications for corrections.
+- Preserve source and historic ownership/custody; don't overwrite history when current owner/location changes.
+- Posted journal entries and approved documents should use an auditable correction/reversal process; exact requirements remain to be determined.
+- Design audit output around reconstructable evidence, not only a current `status` column.
+
+## 11. Aggregates and transactions — provisional
+
+- **ReceiptDocument** is a plausible aggregate root governing its `ReceiptLine` children, totals and posting eligibility.
+- **AssetUnit** is a plausible aggregate root governing one serialized unit's valid lifecycle transitions, while linking to origin and histories.
+- **MovementDocument** governs its list of referenced units and supporting rationale; exact ownership of movement records to be tested on real scenarios.
+- Financial posting has its own integrity boundary; journal-entry lines should balance according to verified rules.
+- An application service with a **Unit of Work** coordinates a receipt posting that creates a document and 27 asset units in one database transaction.
+
+Avoid loading entire receipt batches to change one drone. Avoid designing aggregate boundaries solely from SQL foreign keys. A single transaction may persist multiple aggregates when required to maintain a documented cross-aggregate invariant.
+
+## 12. Reporting and reconciliation requirements
+
+At a given date, users must be able to:
+
+1. Explain a financial total by subaccount, program, КЕКВ, source, nomenclature and document.
+2. Identify exact serialized physical units contributing to a quantity/monetary balance.
+3. Find a unit by serial number and see its origin, price, lifecycle events, custody/location history, depreciation (if applicable), and write-off reference.
+4. Show non-serialized stock quantities and values by required analytics.
+5. Reconcile property-service balances to finance-service balances and explain discrepancies.
+6. Produce reports without losing the historical context when a unit has moved or been written off.
+
+Do not confuse a receipt's **original quantity** with its **remaining current stock**. Be explicit about document-effective dates, late postings, accounting periods, and any snapshots used for performance.
+
+## 13. First TDD vertical slice: `RegisterInventoryReceipt`
+
+**Input:** confirmed receipt document and one serialized homogeneous line; nomenclature; quantity; unit price; synthetic serial identifiers; applicable receipt source and analytics.
+
+**Expected output:** accepted receipt and 27 independently identified `AssetUnit` records linked to its original line, or a clear domain/application failure with no partial persistence.
+
+### Suggested domain tests
+
+```python
+# Behavior sketches: names/API are provisional.
+def test_serialized_receipt_requires_one_serial_per_unit(): ...
+def test_serialized_receipt_rejects_duplicate_serials_in_scope(): ...
+def test_receipt_line_total_uses_decimal_math(): ...
+def test_registered_unit_retains_original_receipt_link(): ...
+def test_original_receipt_remains_unchanged_after_transfer(): ...
+```
+
+### Suggested service tests
+
+```python
+def test_register_receipt_persists_document_and_units_using_fake_uow(): ...
+def test_register_receipt_does_not_commit_when_domain_validation_fails(): ...
+```
+
+### Integration tests (isolated PostgreSQL)
+
+- SQLAlchemy mapping of receipt, lines and units.
+- Unique constraint / concurrency handling under the approved serial-namespace rule.
+- Atomic rollback when a unit conflicts or database write fails.
+- Alembic migration creates expected constraints.
+
+### E2E / Excel tests
+
+A few representative Flask/upload/report workflows using synthetic files. Preserve existing generation behavior where present. Do not assert binary identity of XLSX files.
+
+## 14. Key unresolved business decisions
+
+Before irreversible schema or accounting rules are implemented, confirm:
+
+1. **Serial uniqueness policy:** supplier/manufacturer overlap and internally generated-number namespace; correction of wrong numbers.
+2. **Receipt lifecycle:** draft vs posted; whether partial serial capture is permitted; cancellation/amendment workflows.
+3. **Non-serialized stock:** exact nomenclature categories; valuation method and cost allocation for issues across differently priced receipts.
+4. **Accounting source of truth:** which source system owns balances, postings, and official account mapping; reconciliation workflow.
+5. **Accounting dimensions:** where program, КЕКВ, funding source, account and subaccount attach (receipt, unit, movement, posting) and whether they can change by reclassification.
+6. **Movement events:** permitted transitions, custody acceptance, issue vs consumption vs write-off, document requirements, dates.
+7. **Fixed asset depreciation:** commencement, useful life, method, rounding, historical adjustments and disposal.
+8. **As-of queries:** rules for backdated/late-arriving documents and closed periods.
+9. **Correcting history:** reversal, reclassification, and audit requirements.
+10. **Access control:** roles, allowed actions and legally permitted data handling.
+
+Do not replace these questions with assumptions based on generic commercial inventory systems.
+
+## 15. Implementation principles
+
+- Start from confirmed business scenarios and tests, then choose aggregate boundaries and persistence mapping.
+- Prefer immutable historical facts and explicit domain commands over direct ORM field updates.
+- Build a test pyramid: most tests in pure domain, some service tests with fakes, focused PostgreSQL integration, minimal E2E.
+- Use Flask as an entrypoint, not the location of accounting rules.
+- Use SQLAlchemy as an adapter, not a dependency of the domain.
+- Keep Excel imports/exports in adapters; they must not define the domain model.
+- Avoid unnecessary microservices, event sourcing, over-generalized repositories or a full abstraction layer for every reference table.
+- Any illustrative amounts, codes, documents and identifiers in this file are **not authoritative accounting guidance**.
+
+## 16. Security
+
+This repository may eventually handle sensitive property and financial records. Use **only synthetic data** for prompts, automated tests and committed examples. Do not expose actual service members, organizational identifiers, serial numbers, inventory locations, documents, operational information, database exports or spreadsheets to AI tools unless expressly authorized by applicable procedures. Protect secrets and separate test/dev/production environments.
