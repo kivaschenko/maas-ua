@@ -60,8 +60,10 @@ The store exposes read-only committed mappings. A stale transaction is rejected
 rather than overwriting a newer commit. This adapter does not provide thread-safe
 or cross-process database concurrency guarantees.
 
-Provisional choices for this reversible milestone, requiring confirmation before
-production persistence or accounting behavior:
+The choices below describe Milestone 1. Serial comparison, monetary representation,
+and the absence of document-number uniqueness were confirmed for Milestone 2 on
+2026-10-30; see [the domain decisions](../architecture/domain-model.md#17-confirmed-milestone-2-receipt-persistence-decisions)
+and [PostgreSQL setup](postgresql-receipts.md). Other accounting policies remain open.
 
 - Serial uniqueness uses an explicit caller-supplied namespace and exact,
   case-sensitive text. Blank values and outer whitespace are rejected, without
