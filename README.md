@@ -4,7 +4,7 @@
 
 MAAS-UA is a Python web application for automating military property accounting workflows, maintaining registers of fixed assets and inventories, reconciling accounting records, and generating Excel-based accounting documents.
 
-> **Project status:** Initial architecture and repository setup. The capabilities below describe the intended scope; they are not all implemented yet.
+> **Project status:** Receipt registration is implemented with a pure Python domain, service layer, transactional fakes, and PostgreSQL repositories/Unit of Work using Alembic. See [in-memory usage](docs/development/in-memory-receipts.md) and [PostgreSQL setup and tests](docs/development/postgresql-receipts.md). The broader capabilities below remain planned.
 >
 > **Data protection:** Use synthetic or properly sanitized datasets for development, testing, CI, and public issue reports. Never commit real military accounting documents, personal data, operational details, or credentials.
 
@@ -32,19 +32,14 @@ MAAS-UA is a Python web application for automating military property accounting 
 
 ## Architecture
 
-The application follows a **pragmatic three-layer architecture**:
+The implemented receipt slice follows **Domain / Service Layer / Ports & Adapters**:
 
 ```text
-HTTP / HTML / Forms
-        |
-        v
-Presentation Layer (Flask routes / blueprints)
-        |
-        v
-Service Layer (accounting workflows and business rules)
-        |
-        v
-Data Access Layer (SQLAlchemy Session / ORM / PostgreSQL)
+Entrypoints (planned Flask / CLI / Excel triggers)
+    -> Service layer (commands and transaction coordination)
+        -> Domain (pure Python invariants and immutable facts)
+Service layer -> Ports (aggregate repositories and Unit of Work)
+Adapters (SQLAlchemy / PostgreSQL and transactional fakes) implement ports
 ```
 
 Excel readers and writers are separate integration components invoked by services. Calculations that do not require persistence should remain pure Python functions so they can be tested without Flask or a database.
@@ -53,9 +48,11 @@ Excel readers and writers are separate integration components invoked by service
 
 **Presentation:** HTTP requests and responses, form validation, authentication/authorization integration, and template rendering. Routes should not implement accounting calculations or complex SQL queries.
 
-**Services:** Explicit business operations such as registering receipts, calculating depreciation, generating memorial orders, reconciling registers, and writing off assets. Services own workflow coordination, validation, and transaction boundaries.
+**Domain:** Pure Python entities and value objects enforce receipt invariants without ORM or Flask dependencies.
 
-**Data access:** SQLAlchemy ORM models, queries, sessions, and PostgreSQL persistence. SQLAlchemy's `Session` already provides identity-map and unit-of-work behavior; a custom Repository abstraction is **optional**, not mandatory.
+**Services:** Explicit business operations coordinate domain behavior and aggregate repositories, with one explicit UoW commit per successful command. Receipt registration is implemented; other accounting workflows remain planned.
+
+**Data access:** SQLAlchemy persistence records, aggregate repositories, and a session-backed Unit of Work implement the existing ports. Transaction ownership stays in the UoW.
 
 **Excel:** Parse and validate incoming workbooks, then render outgoing workbooks. Keep worksheet layouts and formatting outside core accounting calculations.
 
@@ -65,8 +62,8 @@ Excel readers and writers are separate integration components invoked by service
 2. Define one shared declarative base and `MetaData` with deterministic constraint naming conventions for Alembic.
 3. Use Alembic for schema changes; do not use `Base.metadata.create_all()` as the production migration mechanism.
 4. Use normalized PostgreSQL tables for transactional accounting (**OLTP**), not a Star Schema as the primary database model.
-5. Keep SQLAlchemy ORM models as persistence/application objects where practical; do not duplicate every model as a separate DDD entity.
-6. Add repositories only when they simplify complex queries, isolate important aggregate loading, or solve a concrete testing/maintenance problem.
+5. Keep SQLAlchemy ORM models in adapters. The receipt slice uses explicit conversion to preserve its frozen domain objects; see [the mapping evaluation](docs/development/postgresql-receipts.md#mapping-choice).
+6. Use the existing aggregate repository and UoW contracts for receipt registration; avoid speculative repositories for every table.
 7. Use `Decimal` and explicit rounding rules for money; use PostgreSQL `NUMERIC` for monetary columns. Define and verify financial rules before implementing them.
 8. Treat posted accounting records as controlled, auditable operations. Corrections should follow approved accounting procedures.
 9. Prefer a modular monolith. Do not add microservices, queues, or additional databases without demonstrated need.
@@ -198,7 +195,7 @@ uv run alembic upgrade head
 
 These commands require Alembic configuration, a reachable database, and imported ORM models in `migrations/env.py` so that `target_metadata = Base.metadata` includes every mapped table. Review autogenerated migrations before applying them, especially destructive changes and renames.
 
-## Local development (once bootstrap is implemented)
+## Local database setup
 
 **Prerequisites:** Python version specified in `pyproject.toml`, [uv](https://docs.astral.sh/uv/), and PostgreSQL.
 
@@ -207,16 +204,13 @@ These commands require Alembic configuration, a reachable database, and imported
 uv sync
 
 # Configure local environment (use a non-committed .env or environment variables)
-export DATABASE_URL="postgresql+psycopg://maas:local_password@localhost:5432/maas_dev"
+export DATABASE_URL="postgresql+psycopg://maas:dev_password@127.0.0.1:5432/maas_ua_dev"
 
 # Apply migrations
 uv run alembic upgrade head
-
-# Run Flask (application factory to be implemented)
-uv run flask --app maas_ua.app:create_app run --debug
 ```
 
-The database name, credentials, and URL above are **examples**, not provisioned resources. Never use production credentials for development. Exact startup commands must be updated to match the implemented application factory and configuration.
+The synthetic URL above matches the local service in `compose.yaml`; start it separately if needed. Never use production credentials for development. Flask entrypoints are not implemented in this milestone. Application assembly and Alembic require an explicit `DATABASE_URL` and do not load `.env` implicitly.
 
 ## Testing strategy
 
@@ -233,7 +227,7 @@ uv run ruff check .
 uv run ruff format --check .
 ```
 
-These commands become executable after the development dependencies and test suite are added. Tests must never connect to the production database.
+Unit and service tests run without a database. PostgreSQL tests require the separate service and `TEST_DATABASE_URL` described in [the persistence guide](docs/development/postgresql-receipts.md#isolated-integration-tests); otherwise they skip. Tests never use `DATABASE_URL` as a fallback.
 
 ## Excel workflows
 

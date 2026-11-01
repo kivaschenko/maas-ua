@@ -135,7 +135,7 @@ These labels, amounts, dates and serials are **synthetic** and are not real unit
 - A posted receipt cannot be silently edited to erase original quantity/price/provenance. Corrections require a defined, auditable amendment or reversal workflow.
 - On failed posting, no partial units/receipt are committed.
 
-**Not yet decided:** whether draft receipts may be stored partially before all serial numbers are captured; allowed correction/reversal workflow; when and how postings are generated; namespace-wide serial uniqueness rules.
+**Not yet decided:** whether draft receipts may be stored partially before all serial numbers are captured; allowed correction/reversal workflow; when and how postings are generated. Section 17 records the confirmed serial uniqueness rule for the implemented receipt slice; actual namespace assignment remains unresolved.
 
 ## 7. Identity and serial numbering
 
@@ -148,7 +148,7 @@ Recommended split:
 - `serial_origin`: `MANUFACTURER` / `SUPPLIER` / `INTERNAL` or another confirmed classification.
 - `serial_namespace` / `issuer`: only if needed for correct uniqueness and disambiguation.
 
-**Open issue:** Are supplier serial numbers globally unique in the service's actual data? If not, define uniqueness as a composite (issuer + normalized serial), or another business-approved scheme. An internal sequence may require PostgreSQL-controlled allocation to avoid concurrent duplicates. Always enforce the final uniqueness rule in the database as well as validating it in domain/services.
+For the implemented receipt slice, uniqueness is the exact, case-sensitive pair of caller-supplied namespace and serial text, without normalization (see section 17). Supplier serials are not assumed globally unique. **Open issue:** how actual supplier/manufacturer/internal namespaces are assigned and authorized. An internal sequence may require PostgreSQL-controlled allocation to avoid concurrent duplicates. Enforce the confirmed uniqueness rule in the database as well as validating it in domain/services.
 
 Documented serial corrections should preserve an audit trail; do not silently reuse identities.
 
@@ -258,7 +258,7 @@ A few representative Flask/upload/report workflows using synthetic files. Preser
 
 Before irreversible schema or accounting rules are implemented, confirm:
 
-1. **Serial uniqueness policy:** supplier/manufacturer overlap and internally generated-number namespace; correction of wrong numbers.
+1. **Serial namespace assignment:** supplier/manufacturer overlap, authorization of caller-supplied namespaces, internally generated-number allocation, and correction of wrong numbers. Exact pair comparison is confirmed for the receipt slice (section 17).
 2. **Receipt lifecycle:** draft vs posted; whether partial serial capture is permitted; cancellation/amendment workflows.
 3. **Non-serialized stock:** exact nomenclature categories; valuation method and cost allocation for issues across differently priced receipts.
 4. **Accounting source of truth:** which source system owns balances, postings, and official account mapping; reconciliation workflow.
@@ -285,3 +285,13 @@ Do not replace these questions with assumptions based on generic commercial inve
 ## 16. Security
 
 This repository may eventually handle sensitive property and financial records. Use **only synthetic data** for prompts, automated tests and committed examples. Do not expose actual service members, organizational identifiers, serial numbers, inventory locations, documents, operational information, database exports or spreadsheets to AI tools unless expressly authorized by applicable procedures. Protect secrets and separate test/dev/production environments.
+
+## 17. Confirmed Milestone 2 receipt persistence decisions
+
+Confirmed by the user on 2026-10-30 for the existing receipt-registration slice:
+
+- Serial uniqueness is the exact, case-sensitive `(namespace, value)` pair, with the namespace supplied explicitly by the caller. No normalization or global serial uniqueness is introduced.
+- Monetary amounts remain finite, nonnegative `Decimal` values, including zero, without added rounding or currency quantization. PostgreSQL stores the unit acquisition price as unconstrained `NUMERIC`; the line total remains derived from price and quantity.
+- Document numbers are not unique identifiers. UUID identities are unique; repeating a document number with distinct units is permitted. Re-registering existing serials is rejected atomically.
+
+These decisions carry Milestone 1 behavior into persistence. They do not define financial postings, regulatory valuation/rounding policy, namespace allocation, drafts, corrections, or document-number deduplication beyond this slice. Implementation and test setup are documented in [PostgreSQL receipt persistence](../development/postgresql-receipts.md).
