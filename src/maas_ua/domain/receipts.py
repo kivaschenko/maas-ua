@@ -6,11 +6,13 @@ zero amounts are representable. These are not approved accounting policies.
 """
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal, localcontext
 from enum import StrEnum
 from uuid import UUID, uuid4
+
+from maas_ua.domain.custody import CustodyAssignment, LifecycleState
 
 
 class InvalidReceipt(ValueError):
@@ -37,11 +39,7 @@ class Money:
     currency: str
 
     def __post_init__(self) -> None:
-        if (
-            not isinstance(self.amount, Decimal)
-            or not self.amount.is_finite()
-            or self.amount < 0
-        ):
+        if not isinstance(self.amount, Decimal) or not self.amount.is_finite() or self.amount < 0:
             raise InvalidReceipt("money must be a finite nonnegative Decimal")
         _require_text(self.currency, "currency")
 
@@ -73,9 +71,18 @@ class TrackingPolicy(StrEnum):
 class Nomenclature:
     id: str
     tracking_policy: TrackingPolicy
+    code: str = field(kw_only=True)
+    name: str = field(kw_only=True)
+    unit_of_measure: str = field(kw_only=True)
+    default_accounting_classification: str | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         _require_text(self.id, "nomenclature ID")
+        _require_text(self.code, "nomenclature code")
+        _require_text(self.name, "nomenclature name")
+        _require_text(self.unit_of_measure, "unit of measure")
+        if self.default_accounting_classification is not None:
+            _require_text(self.default_accounting_classification, "default accounting classification")
         if not isinstance(self.tracking_policy, TrackingPolicy):
             raise InvalidReceipt("nomenclature needs an explicit tracking policy")
 
@@ -104,7 +111,9 @@ class ReceiptLine:
             self.nomenclature.tracking_policy is not TrackingPolicy.SERIALIZED
         ):
             raise InvalidReceipt("this receipt requires serialized nomenclature")
-        if not isinstance(self.quantity, Quantity) or self.quantity.unit != "pcs":
+        if not isinstance(self.quantity, Quantity) or (
+            self.quantity.unit != "pcs" or self.quantity.unit != self.nomenclature.unit_of_measure
+        ):
             raise InvalidReceipt("serialized receipt quantity must use pcs")
         if not isinstance(self.unit_price, Money):
             raise InvalidReceipt("unit price must be Money")
@@ -141,15 +150,9 @@ class ReceiptDocument:
         _require_id(self.id)
         _require_text(self.document_number, "document number")
         _require_text(self.source, "receipt source")
-        if (
-            type(self.document_date) is not date
-            or type(self.effective_date) is not date
-        ):
+        if type(self.document_date) is not date or type(self.effective_date) is not date:
             raise InvalidReceipt("document and effective dates must be dates")
-        if (
-            not isinstance(self.created_at, datetime)
-            or self.created_at.utcoffset() is None
-        ):
+        if not isinstance(self.created_at, datetime) or self.created_at.utcoffset() is None:
             raise InvalidReceipt("creation timestamp must be timezone-aware")
         lines = tuple(self.lines)
         if not lines or any(not isinstance(line, ReceiptLine) for line in lines):
@@ -164,10 +167,19 @@ class AssetUnit:
     id: UUID
     serial_number: SerialNumber
     receipt_line_id: UUID
+    custody: CustodyAssignment | None = None
+    lifecycle_state: LifecycleState | None = LifecycleState.ACTIVE
+    last_effective_date: date | None = None
 
     def __post_init__(self) -> None:
         _require_id(self.id)
         _require_id(self.receipt_line_id)
+        if self.custody is not None and not isinstance(self.custody, CustodyAssignment):
+            raise InvalidReceipt("custody must be an assignment or unknown")
+        if self.lifecycle_state is not None and not isinstance(self.lifecycle_state, LifecycleState):
+            raise InvalidReceipt("lifecycle state must be explicit or unknown")
+        if self.last_effective_date is not None and type(self.last_effective_date) is not date:
+            raise InvalidReceipt("last effective date must be a date or unknown")
         if not isinstance(self.serial_number, SerialNumber):
             raise InvalidReceipt("unit requires a serial identifier")
 
@@ -191,6 +203,7 @@ def register_serialized_receipt(
     line_total: Money,
     serial_numbers: Iterable[SerialNumber],
     analytics: tuple[tuple[str, str], ...] = (),
+    initial_custody: CustodyAssignment | None = None,
     new_id: Callable[[], UUID] = uuid4,
 ) -> RegisteredReceipt:
     """Build a complete receipt and its units, with no persistence side effects."""
@@ -206,9 +219,7 @@ def register_serialized_receipt(
         (line,),
     )
     if not isinstance(line_total, Money) or line.total != line_total:
-        raise InvalidReceipt(
-            "line total must equal quantity times unit price in one currency"
-        )
+        raise InvalidReceipt("line total must equal quantity times unit price in one currency")
     if not isinstance(serial_numbers, Iterable):
         raise InvalidReceipt("serial identifiers must be an iterable collection")
     serials = tuple(serial_numbers)
@@ -218,7 +229,10 @@ def register_serialized_receipt(
         raise InvalidReceipt("all units require serial identifiers")
     if len(set(serials)) != len(serials):
         raise DuplicateSerialNumber("duplicate serial in namespace")
-    units = tuple(AssetUnit(new_id(), serial, line.id) for serial in serials)
+    units = tuple(
+        AssetUnit(new_id(), serial, line.id, custody=initial_custody, last_effective_date=effective_date)
+        for serial in serials
+    )
     identities = {receipt.id, line.id, *(unit.id for unit in units)}
     if len(identities) != len(units) + 2:
         raise InvalidReceipt("generated internal identities must be distinct")

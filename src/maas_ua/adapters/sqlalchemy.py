@@ -6,24 +6,62 @@ from typing import Self
 from uuid import UUID
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, selectinload
 
 from maas_ua.adapters.orm import (
     AssetUnitRecord,
+    MovementDocumentRecord,
+    NomenclatureRecord,
     ReceiptDocumentRecord,
+    movement_from_record,
+    movement_to_record,
+    nomenclature_from_record,
+    nomenclature_to_record,
     receipt_from_record,
     receipt_to_record,
     unit_from_record,
     unit_to_record,
 )
+from maas_ua.domain.movements import DuplicateMovement, MovementDocument
 from maas_ua.domain.receipts import (
     AssetUnit,
     DuplicateSerialNumber,
+    Nomenclature,
     ReceiptDocument,
     SerialNumber,
 )
-from maas_ua.ports import RepositoryConflict
+from maas_ua.ports import DuplicateNomenclatureCode, RepositoryConflict
+
+
+def _translate_concurrency(error: OperationalError) -> None:
+    if getattr(error.orig, "sqlstate", None) in {"55P03", "40P01", "40001"}:
+        raise RepositoryConflict("concurrent asset transaction; retry the complete command") from None
+    raise error
+
+
+class SqlAlchemyNomenclatureRepository:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def add(self, item: Nomenclature) -> None:
+        self.session.add(nomenclature_to_record(item))
+
+    def get(self, nomenclature_id: str) -> Nomenclature | None:
+        for record in self.session.new:
+            if isinstance(record, NomenclatureRecord) and record.id == nomenclature_id:
+                return nomenclature_from_record(record)
+        with self.session.no_autoflush:
+            record = self.session.get(NomenclatureRecord, nomenclature_id)
+            return nomenclature_from_record(record) if record is not None else None
+
+    def get_by_code(self, code: str) -> Nomenclature | None:
+        for record in self.session.new:
+            if isinstance(record, NomenclatureRecord) and record.code == code:
+                return nomenclature_from_record(record)
+        with self.session.no_autoflush:
+            record = self.session.scalar(select(NomenclatureRecord).where(NomenclatureRecord.code == code))
+            return nomenclature_from_record(record) if record is not None else None
 
 
 class SqlAlchemyReceiptRepository:
@@ -31,7 +69,19 @@ class SqlAlchemyReceiptRepository:
         self.session = session
 
     def add(self, receipt: ReceiptDocument) -> None:
-        self.session.add(receipt_to_record(receipt))
+        record = receipt_to_record(receipt)
+        for line in record.lines:
+            pending = next(
+                (
+                    item
+                    for item in self.session.new
+                    if isinstance(item, NomenclatureRecord) and item.id == line.nomenclature_id
+                ),
+                None,
+            )
+            with self.session.no_autoflush:
+                line.nomenclature = pending or self.session.get(NomenclatureRecord, line.nomenclature_id)
+        self.session.add(record)
 
     def get(self, receipt_id: UUID) -> ReceiptDocument | None:
         for record in self.session.new:
@@ -62,6 +112,36 @@ class SqlAlchemyAssetUnitRepository:
             record = self.session.get(AssetUnitRecord, unit_id)
             return unit_from_record(record) if record is not None else None
 
+    def get_for_update(self, unit_ids: tuple[UUID, ...]) -> tuple[AssetUnit, ...]:
+        # Stable lock ordering prevents overlapping multi-unit transfers deadlocking.
+        # Refresh any prior reads after waiting on a competing transaction.
+        statement = (
+            select(AssetUnitRecord)
+            .where(AssetUnitRecord.id.in_(unit_ids))
+            .order_by(AssetUnitRecord.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        try:
+            with self.session.no_autoflush:
+                return tuple(unit_from_record(record) for record in self.session.scalars(statement))
+        except OperationalError as error:
+            _translate_concurrency(error)
+
+    def save(self, unit: AssetUnit) -> None:
+        with self.session.no_autoflush:
+            record = self.session.get(AssetUnitRecord, unit.id)
+        if record is None or (record.receipt_line_id, record.serial_namespace, record.serial_value) != (
+            unit.receipt_line_id,
+            unit.serial_number.namespace,
+            unit.serial_number.value,
+        ):
+            raise RepositoryConflict("unit must exist and origin must remain unchanged")
+        record.custody_location_ref = unit.custody.location_ref if unit.custody else None
+        record.custody_party_ref = unit.custody.responsible_party_ref if unit.custody else None
+        record.lifecycle_state = unit.lifecycle_state.value if unit.lifecycle_state else None
+        record.last_effective_date = unit.last_effective_date
+
     def contains_serial(self, serial: SerialNumber) -> bool:
         if any(
             isinstance(record, AssetUnitRecord)
@@ -82,6 +162,27 @@ class SqlAlchemyAssetUnitRepository:
             return bool(self.session.scalar(statement))
 
 
+class SqlAlchemyMovementRepository:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def add(self, movement: MovementDocument) -> None:
+        self.session.add(movement_to_record(movement))
+
+    def get(self, movement_id: UUID) -> MovementDocument | None:
+        for record in self.session.new:
+            if isinstance(record, MovementDocumentRecord) and record.id == movement_id:
+                return movement_from_record(record)
+        statement = (
+            select(MovementDocumentRecord)
+            .where(MovementDocumentRecord.id == movement_id)
+            .options(selectinload(MovementDocumentRecord.lines))
+        )
+        with self.session.no_autoflush:
+            record = self.session.scalar(statement)
+            return movement_from_record(record) if record is not None else None
+
+
 class SqlAlchemyUnitOfWork:
     """One fresh session per command; repositories never flush or commit.
 
@@ -98,8 +199,10 @@ class SqlAlchemyUnitOfWork:
         if self._active:
             raise RuntimeError("unit of work is already active")
         self.session = self.session_factory()
+        self.nomenclatures = SqlAlchemyNomenclatureRepository(self.session)
         self.receipts = SqlAlchemyReceiptRepository(self.session)
         self.asset_units = SqlAlchemyAssetUnitRepository(self.session)
+        self.movements = SqlAlchemyMovementRepository(self.session)
         self._active = True
         self._committed = False
         return self
@@ -124,16 +227,17 @@ class SqlAlchemyUnitOfWork:
             self.session.commit()
         except IntegrityError as error:
             self.session.rollback()
-            constraint = getattr(
-                getattr(error.orig, "diag", None), "constraint_name", None
-            )
+            constraint = getattr(getattr(error.orig, "diag", None), "constraint_name", None)
+            if constraint == "pk_movement_documents":
+                raise DuplicateMovement("movement identity already processed") from None
+            if constraint == "uq_nomenclatures_code":
+                raise DuplicateNomenclatureCode("nomenclature code already registered") from None
             if constraint == "uq_asset_units_serial":
-                raise DuplicateSerialNumber(
-                    "serial identifier already registered in namespace"
-                ) from None
-            raise RepositoryConflict(
-                "an identity or reference constraint prevents registration"
-            ) from None
+                raise DuplicateSerialNumber("serial identifier already registered in namespace") from None
+            raise RepositoryConflict("an identity or reference constraint prevents registration") from None
+        except OperationalError as error:
+            self.session.rollback()
+            _translate_concurrency(error)
         self._committed = True
 
     def rollback(self) -> None:

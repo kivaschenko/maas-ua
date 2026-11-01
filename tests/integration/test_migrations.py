@@ -15,6 +15,9 @@ def test_upgrade_downgrade_and_metadata_agree(database_url, migration_config):
                 "receipt_documents",
                 "receipt_lines",
                 "asset_units",
+                "nomenclatures",
+                "movement_documents",
+                "movement_lines",
             }
             assert connection.scalar(text("SELECT version_num FROM alembic_version"))
         command.check(migration_config)

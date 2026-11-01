@@ -21,6 +21,8 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from maas_ua.domain.custody import CustodyAssignment, LifecycleState
+from maas_ua.domain.movements import MovementDocument, MovementLine
 from maas_ua.domain.receipts import (
     AssetUnit,
     Money,
@@ -42,6 +44,46 @@ class Base(DeclarativeBase):
             "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
             "pk": "pk_%(table_name)s",
         }
+    )
+
+
+class NomenclatureRecord(Base):
+    __tablename__ = "nomenclatures"
+    __table_args__ = (
+        UniqueConstraint("code", name="uq_nomenclatures_code"),
+        CheckConstraint("tracking_policy IN ('SERIALIZED', 'QUANTITY')", name="tracking_policy"),
+        *(
+            CheckConstraint(f"{column} <> '' AND {column} = btrim({column})", name=f"{column}_text")
+            for column in ("id", "code", "name", "unit_of_measure")
+        ),
+        CheckConstraint(
+            "default_accounting_classification IS NULL OR "
+            "(default_accounting_classification <> '' AND "
+            "default_accounting_classification = btrim(default_accounting_classification))",
+            name="classification_text",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    code: Mapped[str] = mapped_column(Text(collation="C"))
+    name: Mapped[str] = mapped_column(Text)
+    unit_of_measure: Mapped[str] = mapped_column(Text)
+    tracking_policy: Mapped[str] = mapped_column(Text)
+    default_accounting_classification: Mapped[str | None] = mapped_column(Text)
+
+
+def nomenclature_to_record(item: Nomenclature) -> NomenclatureRecord:
+    return NomenclatureRecord(**vars(item))
+
+
+def nomenclature_from_record(record: NomenclatureRecord) -> Nomenclature:
+    return Nomenclature(
+        record.id,
+        TrackingPolicy(record.tracking_policy),
+        code=record.code,
+        name=record.name,
+        unit_of_measure=record.unit_of_measure,
+        default_accounting_classification=record.default_accounting_classification,
     )
 
 
@@ -76,7 +118,8 @@ class ReceiptLineRecord(Base):
     id: Mapped[UUID] = mapped_column(primary_key=True)
     receipt_id: Mapped[UUID] = mapped_column(ForeignKey("receipt_documents.id"))
     position: Mapped[int]
-    nomenclature_id: Mapped[str] = mapped_column(Text)
+    nomenclature_id: Mapped[str] = mapped_column(ForeignKey("nomenclatures.id"))
+    nomenclature: Mapped[NomenclatureRecord] = relationship()
     tracking_policy: Mapped[str] = mapped_column(Text)
     quantity_count: Mapped[int] = mapped_column(BigInteger)
     quantity_unit: Mapped[str] = mapped_column(Text)
@@ -89,20 +132,18 @@ class ReceiptLineRecord(Base):
 
 class AssetUnitRecord(Base):
     __tablename__ = "asset_units"
-    __table_args__ = (
-        UniqueConstraint(
-            "serial_namespace", "serial_value", name="uq_asset_units_serial"
-        ),
-    )
+    __table_args__ = (UniqueConstraint("serial_namespace", "serial_value", name="uq_asset_units_serial"),)
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
-    receipt_line_id: Mapped[UUID] = mapped_column(
-        ForeignKey("receipt_lines.id"), index=True
-    )
+    receipt_line_id: Mapped[UUID] = mapped_column(ForeignKey("receipt_lines.id"), index=True)
     # C collation keeps equality exact even if the database default differs.
     serial_namespace: Mapped[str] = mapped_column(Text(collation="C"))
     serial_value: Mapped[str] = mapped_column(Text(collation="C"))
     receipt_line: Mapped[ReceiptLineRecord] = relationship()
+    custody_location_ref: Mapped[str | None] = mapped_column(Text)
+    custody_party_ref: Mapped[str | None] = mapped_column(Text)
+    lifecycle_state: Mapped[str | None] = mapped_column(Text)
+    last_effective_date: Mapped[date | None]
 
 
 def receipt_to_record(receipt: ReceiptDocument) -> ReceiptDocumentRecord:
@@ -141,9 +182,7 @@ def receipt_from_record(record: ReceiptDocumentRecord) -> ReceiptDocument:
         lines=tuple(
             ReceiptLine(
                 id=line.id,
-                nomenclature=Nomenclature(
-                    line.nomenclature_id, TrackingPolicy(line.tracking_policy)
-                ),
+                nomenclature=nomenclature_from_record(line.nomenclature),
                 quantity=Quantity(line.quantity_count, line.quantity_unit),
                 unit_price=Money(line.unit_price, line.currency),
                 analytics=tuple(tuple(pair) for pair in line.analytics),
@@ -159,6 +198,10 @@ def unit_to_record(unit: AssetUnit) -> AssetUnitRecord:
         receipt_line_id=unit.receipt_line_id,
         serial_namespace=unit.serial_number.namespace,
         serial_value=unit.serial_number.value,
+        custody_location_ref=unit.custody.location_ref if unit.custody else None,
+        custody_party_ref=unit.custody.responsible_party_ref if unit.custody else None,
+        lifecycle_state=unit.lifecycle_state.value if unit.lifecycle_state else None,
+        last_effective_date=unit.last_effective_date,
     )
 
 
@@ -167,4 +210,84 @@ def unit_from_record(record: AssetUnitRecord) -> AssetUnit:
         id=record.id,
         receipt_line_id=record.receipt_line_id,
         serial_number=SerialNumber(record.serial_namespace, record.serial_value),
+        custody=(
+            CustodyAssignment(record.custody_location_ref, record.custody_party_ref)
+            if record.custody_location_ref is not None
+            else None
+        ),
+        lifecycle_state=LifecycleState(record.lifecycle_state) if record.lifecycle_state else None,
+        last_effective_date=record.last_effective_date,
+    )
+
+
+class MovementDocumentRecord(Base):
+    __tablename__ = "movement_documents"
+    __table_args__ = (
+        CheckConstraint(
+            "source_location_ref <> destination_location_ref OR source_party_ref <> destination_party_ref",
+            name="distinct_assignments",
+        ),
+        *(
+            CheckConstraint(f"{column} <> '' AND {column} = btrim({column})", name=f"{column}_text")
+            for column in (
+                "document_number",
+                "source_location_ref",
+                "source_party_ref",
+                "destination_location_ref",
+                "destination_party_ref",
+            )
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    document_number: Mapped[str] = mapped_column(Text)
+    document_date: Mapped[date]
+    effective_date: Mapped[date]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    source_location_ref: Mapped[str] = mapped_column(Text)
+    source_party_ref: Mapped[str] = mapped_column(Text)
+    destination_location_ref: Mapped[str] = mapped_column(Text)
+    destination_party_ref: Mapped[str] = mapped_column(Text)
+    lines: Mapped[list[MovementLineRecord]] = relationship(order_by="MovementLineRecord.position")
+
+
+class MovementLineRecord(Base):
+    __tablename__ = "movement_lines"
+    __table_args__ = (
+        UniqueConstraint("movement_id", "position", name="uq_movement_lines_position"),
+        CheckConstraint("position >= 0", name="position_nonnegative"),
+    )
+    movement_id: Mapped[UUID] = mapped_column(ForeignKey("movement_documents.id"), primary_key=True)
+    asset_unit_id: Mapped[UUID] = mapped_column(ForeignKey("asset_units.id"), primary_key=True, index=True)
+    position: Mapped[int]
+
+
+def movement_to_record(movement: MovementDocument) -> MovementDocumentRecord:
+    return MovementDocumentRecord(
+        id=movement.id,
+        document_number=movement.document_number,
+        document_date=movement.document_date,
+        effective_date=movement.effective_date,
+        created_at=movement.created_at,
+        source_location_ref=movement.source.location_ref,
+        source_party_ref=movement.source.responsible_party_ref,
+        destination_location_ref=movement.destination.location_ref,
+        destination_party_ref=movement.destination.responsible_party_ref,
+        lines=[
+            MovementLineRecord(asset_unit_id=line.asset_unit_id, position=position)
+            for position, line in enumerate(movement.lines)
+        ],
+    )
+
+
+def movement_from_record(record: MovementDocumentRecord) -> MovementDocument:
+    return MovementDocument(
+        id=record.id,
+        document_number=record.document_number,
+        document_date=record.document_date,
+        effective_date=record.effective_date,
+        created_at=record.created_at,
+        source=CustodyAssignment(record.source_location_ref, record.source_party_ref),
+        destination=CustodyAssignment(record.destination_location_ref, record.destination_party_ref),
+        lines=tuple(MovementLine(line.asset_unit_id) for line in record.lines),
     )

@@ -1,8 +1,8 @@
 # PostgreSQL receipt persistence
 
-Milestone 2 connects `RegisterInventoryReceipt` to PostgreSQL. The domain, service,
-ports, and transactional fakes retain their existing behavior. There is no Flask
-entrypoint, financial posting, movement, depreciation, or Excel workflow here.
+Milestone 2 connects `RegisterInventoryReceipt` to PostgreSQL. Milestone 2.1 adds
+persistent nomenclature and Milestone 3 adds custody transfers through the same UoW.
+There is no Flask entrypoint, financial posting, depreciation, or Excel workflow here.
 
 ## Mapping choice
 
@@ -12,7 +12,7 @@ SQLAlchemy imperative mapping against an equivalent frozen class raised
 SQLAlchemy instrumentation and mutable relationship collections would require
 special handling or changes to the existing immutability guarantees.
 
-Three declarative persistence records in `adapters/orm.py` therefore map explicitly
+Declarative persistence records in `adapters/orm.py` therefore map explicitly
 to and from domain objects. This introduces conversion code, but keeps ORM state
 out of the domain and returns fully materialized, immutable snapshots that work
 after the session closes. The receipt repository eagerly loads its line collection;
@@ -22,13 +22,16 @@ asset units are separate aggregates accessed by their own repository.
 
 | Table | Stored facts and constraints |
 | --- | --- |
+| `nomenclatures` | Existing text ID, unique stable code, name, unit, explicit tracking, optional default classification |
 | `receipt_documents` | UUID PK, document number, document date, effective date, aware creation timestamp, source |
 | `receipt_lines` | UUID PK, receipt FK, tuple position, nomenclature ID and tracking policy snapshot, quantity and unit, unit price and currency, ordered analytics pairs |
-| `asset_units` | UUID PK, origin line FK, serial namespace and serial value; unique exact namespace/value pair |
+| `asset_units` | UUID PK, origin line FK, serial namespace/value, current custody, lifecycle, latest effective date; unique exact namespace/value pair |
+| `movement_documents` | UUID PK, document/effective dates, creation timestamp, historical source/destination |
+| `movement_lines` | Movement/unit FK pair, ordered position; each unit occurs once per document |
 
 `position` preserves the existing ordered line tuple; it is storage metadata, with
-a unique `(receipt_id, position)` constraint. Nomenclature remains the existing
-line value object, without an invented catalog table. Analytics use a JSONB array
+a unique `(receipt_id, position)` constraint. Receipt nomenclature IDs reference
+the persistent catalog; tracking policy remains a receipt snapshot. Analytics use a JSONB array
 of pairs to preserve their existing order. Line totals are derived and not stored
 twice. There is no document-number uniqueness constraint.
 
@@ -39,7 +42,8 @@ reject nonfinite/negative prices, nonpositive quantities, non-`pcs` units, and
 nonserialized lines. PostgreSQL's technical storage/index limits still apply;
 these are not additional approved business maxima or currency rules.
 
-No cascading deletes, repository update/delete methods, or ORM merges are used.
+No cascading deletes or ORM merges are used. The asset repository updates current
+state only; receipts and movement history have no update/delete methods.
 The domain and registration service validate the quantity/serial count and totals
 before writes. Database FKs and uniqueness constraints defend references and
 identity/serial races; there are no triggers implementing a second receipt workflow.
@@ -49,7 +53,8 @@ identity/serial races; there are no triggers implementing a second receipt workf
 `SqlAlchemyUnitOfWork` receives a session factory and opens one fresh session per
 command. Repositories stage inserts and return snapshots, including staged
 additions, without flushing or committing. The existing service calls `commit()`
-once after staging the receipt and all units. A failed commit, exception, explicit
+once after staging the receipt and all units. Transfers lock selected units in UUID
+order, validate the complete command, then stage a movement and current custody updates. A failed commit, exception, explicit
 rollback, or exit without commit discards uncommitted changes and closes the session.
 
 The serial precheck provides an early error, but does not prevent races. The unique
@@ -89,6 +94,9 @@ from maas_ua.bootstrap import make_session_factory
 from maas_ua.service_layer.receipts import register_inventory_receipt
 
 session_factory = make_session_factory()  # Reads DATABASE_URL; no connection yet.
+with SqlAlchemyUnitOfWork(session_factory) as writer:
+    writer.nomenclatures.add(command.nomenclature)  # Create once before the first receipt.
+    writer.commit()
 result = register_inventory_receipt(command, SqlAlchemyUnitOfWork(session_factory))
 
 with SqlAlchemyUnitOfWork(session_factory) as reader:
@@ -97,6 +105,18 @@ with SqlAlchemyUnitOfWork(session_factory) as reader:
 
 The application owns the factory/engine lifetime. Each UoW closes its session.
 Schema changes use Alembic; there is no `metadata.create_all()` startup path.
+
+For populated Milestone 2 databases, first upgrade to `0002` and enter reviewed
+catalog records with the existing nomenclature IDs, matching tracking and units.
+Then upgrade to head. `0003` refuses unresolved or incompatible references without
+rewriting receipts. `0004` leaves legacy custody/lifecycle unknown and sets the
+known latest effective date from each original receipt. Such units cannot transfer
+until an approved onboarding workflow exists; do not invent values in a migration.
+
+Create each catalog record once; subsequent receipts reuse it. The constructor now
+requires `code`, `name` and `unit_of_measure` in addition to the existing ID/tracking.
+Registration rejects missing or mismatched catalog snapshots. See the confirmed
+[transfer rules](../architecture/domain-model.md#19-milestone-3--documented-custody-transfers).
 
 ## Isolated integration tests
 

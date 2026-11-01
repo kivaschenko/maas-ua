@@ -29,19 +29,19 @@ def command():
         document_date=date(2026, 1, 15),
         effective_date=date(2026, 1, 16),
         source="EXAMPLE-SOURCE",
-        nomenclature=Nomenclature("EXAMPLE-FPV", TrackingPolicy.SERIALIZED),
+        nomenclature=Nomenclature(
+            "EXAMPLE-FPV", TrackingPolicy.SERIALIZED, code="EXAMPLE-FPV", name="Example drone", unit_of_measure="pcs"
+        ),
         quantity=Quantity(27, "pcs"),
         unit_price=Money(Decimal("14500.00"), "UAH"),
         line_total=Money(Decimal("391500.00"), "UAH"),
-        serial_numbers=tuple(
-            SerialNumber("EXAMPLE", f"EXAMPLE-{i}") for i in range(27)
-        ),
+        serial_numbers=tuple(SerialNumber("EXAMPLE", f"EXAMPLE-{i}") for i in range(27)),
         analytics=(("example-dimension", "EXAMPLE-CODE"),),
     )
 
 
 def test_persists_document_and_all_units_and_commits_once(command):
-    store = FakeStore()
+    store = FakeStore(nomenclatures=(command.nomenclature,))
     uow = FakeUnitOfWork(store)
     created_at = datetime(2026, 1, 17, tzinfo=UTC)
 
@@ -70,7 +70,7 @@ def test_persists_document_and_all_units_and_commits_once(command):
     ],
 )
 def test_validation_failure_never_commits_or_leaves_partial_data(command, changes):
-    store = FakeStore()
+    store = FakeStore(nomenclatures=(command.nomenclature,))
     uow = FakeUnitOfWork(store)
     with pytest.raises(InvalidReceipt):
         register_inventory_receipt(replace(command, **changes), uow)
@@ -80,7 +80,7 @@ def test_validation_failure_never_commits_or_leaves_partial_data(command, change
 
 
 def test_existing_serial_conflict_preserves_previous_registration(command):
-    store = FakeStore()
+    store = FakeStore(nomenclatures=(command.nomenclature,))
     original = register_inventory_receipt(command, FakeUnitOfWork(store))
     uow = FakeUnitOfWork(store)
     conflicting = replace(command, document_number="EXAMPLE-126")
@@ -94,13 +94,11 @@ def test_existing_serial_conflict_preserves_previous_registration(command):
 
 
 def test_same_serial_text_in_another_namespace_can_be_registered(command):
-    store = FakeStore()
+    store = FakeStore(nomenclatures=(command.nomenclature,))
     register_inventory_receipt(command, FakeUnitOfWork(store))
     other = replace(
         command,
-        serial_numbers=tuple(
-            SerialNumber("OTHER-EXAMPLE", s.value) for s in command.serial_numbers
-        ),
+        serial_numbers=tuple(SerialNumber("OTHER-EXAMPLE", s.value) for s in command.serial_numbers),
     )
     register_inventory_receipt(other, FakeUnitOfWork(store))
     assert len(store.receipts) == 2
@@ -124,7 +122,7 @@ def test_failure_while_adding_units_rolls_back_every_staged_aggregate(command):
             self.asset_units.add = fail_after_one_unit
             return self
 
-    store = FakeStore()
+    store = FakeStore(nomenclatures=(command.nomenclature,))
     uow = FailingUnitOfWork(store)
     with pytest.raises(RuntimeError, match="synthetic write failure"):
         register_inventory_receipt(command, uow)
@@ -139,13 +137,11 @@ def test_commit_failure_leaves_previous_committed_data_untouched(command):
         def commit(self):
             raise RuntimeError("synthetic commit failure")
 
-    store = FakeStore()
+    store = FakeStore(nomenclatures=(command.nomenclature,))
     original = register_inventory_receipt(command, FakeUnitOfWork(store))
     other = replace(
         command,
-        serial_numbers=tuple(
-            SerialNumber("OTHER-EXAMPLE", s.value) for s in command.serial_numbers
-        ),
+        serial_numbers=tuple(SerialNumber("OTHER-EXAMPLE", s.value) for s in command.serial_numbers),
     )
     with pytest.raises(RuntimeError, match="synthetic commit failure"):
         register_inventory_receipt(other, FailingCommit(store))
@@ -154,9 +150,9 @@ def test_commit_failure_leaves_previous_committed_data_untouched(command):
 
 
 def test_leaving_uow_without_explicit_commit_discards_changes(command):
-    source_store = FakeStore()
+    source_store = FakeStore(nomenclatures=(command.nomenclature,))
     result = register_inventory_receipt(command, FakeUnitOfWork(source_store))
-    store = FakeStore()
+    store = FakeStore(nomenclatures=(command.nomenclature,))
     with FakeUnitOfWork(store) as uow:
         uow.receipts.add(result.receipt)
         for unit in result.units:
@@ -169,31 +165,40 @@ def test_leaving_uow_without_explicit_commit_discards_changes(command):
 
 
 def test_unit_identity_collision_cannot_overwrite_history(command):
-    store = FakeStore()
+    store = FakeStore(nomenclatures=(command.nomenclature,))
     original = register_inventory_receipt(command, FakeUnitOfWork(store))
     other = replace(
         command,
-        serial_numbers=tuple(
-            SerialNumber("OTHER-EXAMPLE", s.value) for s in command.serial_numbers
-        ),
+        serial_numbers=tuple(SerialNumber("OTHER-EXAMPLE", s.value) for s in command.serial_numbers),
     )
-    ids = iter(
-        [UUID(int=1), UUID(int=2), original.units[0].id]
-        + [UUID(int=i) for i in range(3, 29)]
-    )
+    ids = iter([UUID(int=1), UUID(int=2), original.units[0].id] + [UUID(int=i) for i in range(3, 29)])
     with pytest.raises(RepositoryConflict, match="unit identity"):
-        register_inventory_receipt(
-            other, FakeUnitOfWork(store), new_id=lambda: next(ids)
-        )
+        register_inventory_receipt(other, FakeUnitOfWork(store), new_id=lambda: next(ids))
     assert store.receipts == {original.receipt.id: original.receipt}
     assert store.asset_units == {unit.id: unit for unit in original.units}
 
 
 def test_stale_uow_cannot_erase_another_committed_receipt(command):
-    store = FakeStore()
+    store = FakeStore(nomenclatures=(command.nomenclature,))
     with FakeUnitOfWork(store) as stale:
         result = register_inventory_receipt(command, FakeUnitOfWork(store))
         with pytest.raises(RepositoryConflict, match="store changed"):
             stale.commit()
     assert store.receipts == {result.receipt.id: result.receipt}
     assert store.asset_units == {unit.id: unit for unit in result.units}
+
+
+def test_missing_catalog_reference_never_commits(command):
+    uow = FakeUnitOfWork()
+    with pytest.raises(InvalidReceipt, match="nomenclature"):
+        register_inventory_receipt(command, uow)
+    assert uow.commit_count == 0
+    assert not uow.store.receipts
+
+
+def test_catalog_metadata_cannot_be_spoofed(command):
+    store = FakeStore(nomenclatures=(command.nomenclature,))
+    uow = FakeUnitOfWork(store)
+    with pytest.raises(InvalidReceipt, match="nomenclature"):
+        register_inventory_receipt(replace(command, nomenclature=replace(command.nomenclature, name="Changed")), uow)
+    assert not store.receipts

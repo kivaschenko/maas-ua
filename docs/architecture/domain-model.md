@@ -295,3 +295,90 @@ Confirmed by the user on 2026-10-30 for the existing receipt-registration slice:
 - Document numbers are not unique identifiers. UUID identities are unique; repeating a document number with distinct units is permitted. Re-registering existing serials is rejected atomically.
 
 These decisions carry Milestone 1 behavior into persistence. They do not define financial postings, regulatory valuation/rounding policy, namespace allocation, drafts, corrections, or document-number deduplication beyond this slice. Implementation and test setup are documented in [PostgreSQL receipt persistence](../development/postgresql-receipts.md).
+
+## 18. Milestone 2.1 — persistent nomenclature
+
+`Nomenclature` is immutable reference data with an existing opaque text ID, a
+separate stable internal code, name, unit of measure, explicit tracking policy,
+and optional default accounting classification. Classification is a caller-supplied
+reference, not an invented chart of accounts; unknown classifications remain unset.
+Funding, program, КЕКВ and balances are not catalog identity fields. Codes compare
+exactly and case-sensitively and are unique in PostgreSQL. Catalog creation and
+retrieval use the existing UoW; no catalog edit/delete workflow is provided.
+
+`ReceiptLine` retains its nomenclature reference and receipt-time tracking policy;
+a foreign key enforces catalog existence. Registration checks the supplied catalog
+snapshot against the persistent record and requires matching units of measure.
+Receipts and acquisition prices remain immutable. Catalog IDs are retained as text
+to avoid rewriting historical references or introducing a second identity scheme.
+
+For an existing database, upgrade to `0002`, populate the catalog with reviewed
+metadata using the **existing** receipt nomenclature IDs, then upgrade to `0003`.
+The reference migration refuses absent or incompatible catalog entries; it never
+synthesizes names, codes, units, or replacement IDs. A fresh empty database can
+upgrade directly to head. These migrations have only been exercised on disposable
+test databases; applying them to shared databases remains an operator action.
+
+## 19. Milestone 3 — documented custody transfers
+
+Initial rules confirmed by the user on 2026-11-01:
+
+- Receipt registration may supply an initial `CustodyAssignment` with opaque
+  location and responsible-party references. New receipt units are `ACTIVE`.
+  Unknown custody is represented explicitly by `None`, not a fictional warehouse.
+- Only units with explicitly `ACTIVE` lifecycle state and a matching known source
+  assignment can transfer. `ACTIVE` is the only defined lifecycle value; unknown
+  lifecycle is ineligible. Other states and transitions still require confirmation.
+- Movement identity is a caller-supplied UUID reused on retries. Duplicate UUIDs
+  are rejected; document numbers alone do not identify duplicates or imply legality.
+- A transfer's effective date must be on or after the selected units' receipt and
+  latest transfer dates. Same-day transfers are allowed. Chronology is checked per
+  selected unit; unrelated units need not have the same latest effective date.
+
+`AssetUnit` remains a separate aggregate with immutable identity, serial and receipt
+line link, plus current custody, lifecycle state, and last effective date. Acquisition
+price, nomenclature, receipt origin and analytics remain on the original receipt
+line/document. A transfer returns replacement immutable unit snapshots; it does not
+edit the receipt, change lifecycle, or create financial entries.
+
+`MovementDocument` is an immutable aggregate with UUID, document number/date,
+effective date, aware creation timestamp, historical source and destination
+assignments, and a nonempty ordered tuple of `MovementLine` unit references. Each
+unit appears exactly once. Since all units share source/destination in this command,
+those assignments are stored once on the document rather than repeated per line.
+Line identity is the `(movement_id, asset_unit_id)` pair; foreign keys preserve
+references to existing units. No movement update/delete operation is provided.
+
+The domain validates the complete selection before creating changed snapshots:
+all requested units exist; IDs are distinct; assignments differ; every unit is
+eligible, at the source, and within the allowed effective-date order. The service
+loads only selected units and uses one UoW to insert history and save current
+custody, followed by one explicit commit. Failed validation or persistence rolls
+back all units and the movement. Receipt provenance and acquisition values remain
+unchanged. Serial-number resolution is left to a future entrypoint; this command
+accepts internal UUIDs only.
+
+PostgreSQL locks selected asset rows with `SELECT ... FOR UPDATE` in UUID order
+until transaction completion. Reads refresh snapshots after any lock wait, so a
+competing transfer validates the committed custody/date. The service rechecks the
+movement UUID after waiting; a PK constraint also handles races on disjoint units.
+Lock timeouts, deadlocks and serialization failures become `RepositoryConflict`;
+callers must retry the complete command rather than individual writes. Fakes use
+immutable snapshots and reject stale commits rather than simulating row locks.
+
+Migration `0004` adds current custody/lifecycle/date fields and movement tables.
+Existing units receive their known receipt effective date but retain unknown
+custody and lifecycle; they cannot transfer until a separately approved onboarding
+operation establishes those facts. No such history-repair workflow is implemented.
+
+Scope exclusions and remaining questions:
+
+- Backdated transfers preceding a unit's current effective date, reversals,
+  corrections, closed periods and history editing are unsupported. Approved
+  correction rules must precede an implementation; do not bypass date validation.
+- No posting, depreciation, write-off, quantity-stock movement or Flask interface.
+- No legal document validation, custody acceptance/authorization, HR hierarchy or
+  location catalog. References are opaque; their authoritative source is unresolved.
+- Lifecycle states beyond `ACTIVE`, legacy onboarding, serial-resolution UX and
+  reporting/as-of query APIs remain future work. Movement records retain dated
+  source/destination evidence; a complete historical-reporting service is not built.
