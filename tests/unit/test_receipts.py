@@ -23,13 +23,13 @@ def receipt_input(**changes):
         "effective_date": date(2026, 1, 16),
         "created_at": datetime(2026, 1, 17, tzinfo=UTC),
         "source": "EXAMPLE-SOURCE",
-        "nomenclature": Nomenclature("EXAMPLE-FPV", TrackingPolicy.SERIALIZED),
+        "nomenclature": Nomenclature(
+            "EXAMPLE-FPV", TrackingPolicy.SERIALIZED, code="EXAMPLE-FPV", name="Example drone", unit_of_measure="pcs"
+        ),
         "quantity": Quantity(27, "pcs"),
         "unit_price": Money(Decimal("14500.00"), "UAH"),
         "line_total": Money(Decimal("391500.00"), "UAH"),
-        "serial_numbers": tuple(
-            SerialNumber("EXAMPLE-ISSUER", f"EXAMPLE-FPV-{i:04}") for i in range(1, 28)
-        ),
+        "serial_numbers": tuple(SerialNumber("EXAMPLE-ISSUER", f"EXAMPLE-FPV-{i:04}") for i in range(1, 28)),
         "analytics": (("example-dimension", "EXAMPLE-CODE"),),
     }
     return values | changes
@@ -47,9 +47,7 @@ def test_registers_homogeneous_receipt_with_independent_unit_identities():
     assert len({unit.id for unit in units}) == 27
     assert {unit.id for unit in units}.isdisjoint({receipt.id, line.id})
     assert {unit.receipt_line_id for unit in units} == {line.id}
-    assert (
-        tuple(unit.serial_number for unit in units) == receipt_input()["serial_numbers"]
-    )
+    assert tuple(unit.serial_number for unit in units) == receipt_input()["serial_numbers"]
     assert line.quantity == Quantity(27, "pcs")
     assert line.unit_price == Money(Decimal("14500.00"), "UAH")
     assert line.total == Money(Decimal("391500.00"), "UAH")
@@ -77,18 +75,13 @@ def test_requires_one_serial_per_unit(count):
 def test_rejects_duplicate_serial_in_namespace():
     serials = receipt_input()["serial_numbers"]
     with pytest.raises(InvalidReceipt, match="duplicate serial"):
-        register_serialized_receipt(
-            **receipt_input(serial_numbers=serials[:-1] + (serials[0],))
-        )
+        register_serialized_receipt(**receipt_input(serial_numbers=serials[:-1] + (serials[0],)))
 
 
 def test_same_serial_text_in_different_explicit_namespaces_is_distinct():
     serials = receipt_input()["serial_numbers"]
     result = register_serialized_receipt(
-        **receipt_input(
-            serial_numbers=serials[:-1]
-            + (SerialNumber("OTHER-EXAMPLE", serials[0].value),)
-        )
+        **receipt_input(serial_numbers=serials[:-1] + (SerialNumber("OTHER-EXAMPLE", serials[0].value),))
     )
     assert len({unit.serial_number for unit in result.units}) == 27
 
@@ -107,9 +100,7 @@ def test_rejects_blank_or_padded_serial_without_silent_normalization(value):
         SerialNumber(value, "EXAMPLE")
 
 
-@pytest.mark.parametrize(
-    "amount", [0.1, 1, Decimal("NaN"), Decimal("Infinity"), Decimal(-1)]
-)
+@pytest.mark.parametrize("amount", [0.1, 1, Decimal("NaN"), Decimal("Infinity"), Decimal(-1)])
 def test_money_requires_finite_nonnegative_decimal(amount):
     with pytest.raises(InvalidReceipt):
         Money(amount, "UAH")
@@ -132,9 +123,7 @@ def test_fractional_prices_are_not_silently_rounded():
     assert result.receipt.lines[0].total.amount == Decimal("3.33315")
 
 
-@pytest.mark.parametrize(
-    "total", [Money(Decimal("391499.99"), "UAH"), Money(Decimal(391500), "USD")]
-)
+@pytest.mark.parametrize("total", [Money(Decimal("391499.99"), "UAH"), Money(Decimal(391500), "USD")])
 def test_rejects_incorrect_total_or_currency(total):
     with pytest.raises(InvalidReceipt, match="total"):
         register_serialized_receipt(**receipt_input(line_total=total))
@@ -144,7 +133,15 @@ def test_rejects_incorrect_total_or_currency(total):
     "changes",
     [
         {"quantity": Quantity(27, "kg")},
-        {"nomenclature": Nomenclature("EXAMPLE-CABLE", TrackingPolicy.QUANTITY)},
+        {
+            "nomenclature": Nomenclature(
+                "EXAMPLE-CABLE",
+                TrackingPolicy.QUANTITY,
+                code="EXAMPLE-CABLE",
+                name="Example cable",
+                unit_of_measure="pcs",
+            )
+        },
         {"source": ""},
         {"document_number": ""},
         {"document_date": "2026-01-15"},
@@ -165,9 +162,7 @@ def test_rejects_invalid_receipt_metadata_or_tracking(changes):
 def test_history_is_immutable_and_input_collections_are_snapshotted():
     serials = list(receipt_input()["serial_numbers"])
     analytics = [["example", "EXAMPLE-CODE"]]
-    result = register_serialized_receipt(
-        **receipt_input(serial_numbers=serials, analytics=analytics)
-    )
+    result = register_serialized_receipt(**receipt_input(serial_numbers=serials, analytics=analytics))
     serials.clear()
     analytics[0][1] = "CHANGED"
     assert len(result.units) == 27

@@ -5,8 +5,10 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from uuid import UUID, uuid4
 
+from maas_ua.domain.custody import CustodyAssignment
 from maas_ua.domain.receipts import (
     DuplicateSerialNumber,
+    InvalidReceipt,
     Money,
     Nomenclature,
     Quantity,
@@ -31,6 +33,7 @@ class RegisterInventoryReceipt:
     line_total: Money
     serial_numbers: tuple[SerialNumber, ...]
     analytics: tuple[tuple[str, str], ...] = ()
+    initial_custody: CustodyAssignment | None = None
 
 
 def _utc_now() -> datetime:
@@ -57,15 +60,16 @@ def register_inventory_receipt(
         line_total=command.line_total,
         serial_numbers=command.serial_numbers,
         analytics=command.analytics,
+        initial_custody=command.initial_custody,
         new_id=new_id,
     )
     with uow:
+        if uow.nomenclatures.get(command.nomenclature.id) != command.nomenclature:
+            raise InvalidReceipt("nomenclature must match a persistent catalog record")
         for unit in result.units:
             if uow.asset_units.contains_serial(unit.serial_number):
                 # Avoid including identifiers in error messages or logs.
-                raise DuplicateSerialNumber(
-                    "serial identifier already registered in namespace"
-                )
+                raise DuplicateSerialNumber("serial identifier already registered in namespace")
         uow.receipts.add(result.receipt)
         for unit in result.units:
             uow.asset_units.add(unit)

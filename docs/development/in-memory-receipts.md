@@ -27,13 +27,17 @@ from maas_ua.service_layer.receipts import (
     register_inventory_receipt,
 )
 
-store = FakeStore()
+catalog = Nomenclature(
+    "EXAMPLE-FPV", TrackingPolicy.SERIALIZED,
+    code="EXAMPLE-FPV", name="Example drone", unit_of_measure="pcs",
+)
+store = FakeStore(nomenclatures=(catalog,))
 command = RegisterInventoryReceipt(
     document_number="EXAMPLE-125",
     document_date=date(2026, 1, 15),
     effective_date=date(2026, 1, 15),
     source="EXAMPLE-SOURCE",
-    nomenclature=Nomenclature("EXAMPLE-FPV", TrackingPolicy.SERIALIZED),
+    nomenclature=catalog,
     quantity=Quantity(27, "pcs"),
     unit_price=Money(Decimal("14500.00"), "UAH"),
     line_total=Money(Decimal("391500.00"), "UAH"),
@@ -51,7 +55,7 @@ with FakeUnitOfWork(store) as reader:
     assert unit.receipt_line_id == result.receipt.lines[0].id
 ```
 
-All validation and existing-serial checks complete before repository additions.
+The catalog record must exist before registration. All validation and existing-serial checks complete before repository additions.
 The handler commits once after adding the receipt and every unit. Repository
 changes remain private until commit; leaving a UoW without committing discards
 them. Failed writes leave earlier committed registrations intact. Share a

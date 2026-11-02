@@ -35,27 +35,29 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.fixture
-def command():
-    return RegisterInventoryReceipt(
+def command(session_factory):
+    command = RegisterInventoryReceipt(
         document_number="EXAMPLE-125",
         document_date=date(2026, 1, 15),
         effective_date=date(2026, 1, 16),
         source="EXAMPLE-SOURCE",
-        nomenclature=Nomenclature("EXAMPLE-FPV", TrackingPolicy.SERIALIZED),
+        nomenclature=Nomenclature(
+            "EXAMPLE-FPV", TrackingPolicy.SERIALIZED, code="EXAMPLE-FPV", name="Example drone", unit_of_measure="pcs"
+        ),
         quantity=Quantity(27, "pcs"),
         unit_price=Money(Decimal("14500.00"), "UAH"),
         line_total=Money(Decimal("391500.00"), "UAH"),
-        serial_numbers=tuple(
-            SerialNumber("EXAMPLE-ISSUER", f"EXAMPLE-{i:04}") for i in range(27)
-        ),
+        serial_numbers=tuple(SerialNumber("EXAMPLE-ISSUER", f"EXAMPLE-{i:04}") for i in range(27)),
         analytics=(("z-example", "EXAMPLE-Z"), ("a-example", "EXAMPLE-A")),
     )
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.nomenclatures.add(command.nomenclature)
+        uow.commit()
+    return command
 
 
 def build(command):
-    return register_serialized_receipt(
-        **vars(command), created_at=datetime(2026, 1, 17, tzinfo=UTC)
-    )
+    return register_serialized_receipt(**vars(command), created_at=datetime(2026, 1, 17, tzinfo=UTC))
 
 
 def stage(uow, result):
@@ -74,9 +76,7 @@ def counts(session_factory):
 
 def test_registers_and_reloads_entire_receipt_in_new_session(command, session_factory):
     created_at = datetime(2026, 1, 17, tzinfo=UTC)
-    result = register_inventory_receipt(
-        command, SqlAlchemyUnitOfWork(session_factory), clock=lambda: created_at
-    )
+    result = register_inventory_receipt(command, SqlAlchemyUnitOfWork(session_factory), clock=lambda: created_at)
     assert counts(session_factory) == (1, 1, 27)
 
     with SqlAlchemyUnitOfWork(session_factory) as reader:
@@ -114,9 +114,7 @@ def test_receipt_relationship_preserves_multiple_line_order(command, session_fac
     assert loaded == receipt
 
 
-@pytest.mark.parametrize(
-    "price", ["0", "0.12345", "12345678901234567890.123456789012345"]
-)
+@pytest.mark.parametrize("price", ["0", "0.12345", "12345678901234567890.123456789012345"])
 def test_money_round_trip_never_quantizes(command, session_factory, price):
     unit_price = Money(Decimal(price), "UAH")
     result = register_inventory_receipt(
@@ -128,9 +126,7 @@ def test_money_round_trip_never_quantizes(command, session_factory, price):
 
 
 @pytest.mark.parametrize("change", ["namespace", "serial_case", "namespace_case"])
-def test_serial_uniqueness_uses_exact_explicit_namespace(
-    command, session_factory, change
-):
+def test_serial_uniqueness_uses_exact_explicit_namespace(command, session_factory, change):
     register_inventory_receipt(command, SqlAlchemyUnitOfWork(session_factory))
     serials = tuple(
         SerialNumber(
@@ -141,16 +137,12 @@ def test_serial_uniqueness_uses_exact_explicit_namespace(
         )
         for s in command.serial_numbers
     )
-    register_inventory_receipt(
-        replace(command, serial_numbers=serials), SqlAlchemyUnitOfWork(session_factory)
-    )
+    register_inventory_receipt(replace(command, serial_numbers=serials), SqlAlchemyUnitOfWork(session_factory))
     assert counts(session_factory) == (2, 2, 54)
 
 
 def test_duplicate_registration_keeps_existing_receipt(command, session_factory):
-    original = register_inventory_receipt(
-        command, SqlAlchemyUnitOfWork(session_factory)
-    )
+    original = register_inventory_receipt(command, SqlAlchemyUnitOfWork(session_factory))
     with pytest.raises(DuplicateSerialNumber):
         register_inventory_receipt(command, SqlAlchemyUnitOfWork(session_factory))
     assert counts(session_factory) == (1, 1, 27)
@@ -162,17 +154,13 @@ def test_document_number_is_not_an_invented_uniqueness_rule(command, session_fac
     register_inventory_receipt(command, SqlAlchemyUnitOfWork(session_factory))
     other = replace(
         command,
-        serial_numbers=tuple(
-            SerialNumber("OTHER-EXAMPLE", s.value) for s in command.serial_numbers
-        ),
+        serial_numbers=tuple(SerialNumber("OTHER-EXAMPLE", s.value) for s in command.serial_numbers),
     )
     register_inventory_receipt(other, SqlAlchemyUnitOfWork(session_factory))
     assert counts(session_factory) == (2, 2, 54)
 
 
-def test_interleaved_prechecks_cannot_bypass_database_serial_uniqueness(
-    command, session_factory
-):
+def test_interleaved_prechecks_cannot_bypass_database_serial_uniqueness(command, session_factory):
     first = build(command)
     second = build(replace(command, document_number="EXAMPLE-126"))
     with (
@@ -192,16 +180,12 @@ def test_interleaved_prechecks_cannot_bypass_database_serial_uniqueness(
 
 
 @pytest.mark.parametrize("identity", ["receipt", "line", "unit"])
-def test_database_identity_conflict_cannot_overwrite_history(
-    command, session_factory, identity
-):
+def test_database_identity_conflict_cannot_overwrite_history(command, session_factory, identity):
     first = register_inventory_receipt(command, SqlAlchemyUnitOfWork(session_factory))
     second = build(
         replace(
             command,
-            serial_numbers=tuple(
-                SerialNumber("OTHER-EXAMPLE", s.value) for s in command.serial_numbers
-            ),
+            serial_numbers=tuple(SerialNumber("OTHER-EXAMPLE", s.value) for s in command.serial_numbers),
         )
     )
     if identity == "receipt":
@@ -211,9 +195,7 @@ def test_database_identity_conflict_cannot_overwrite_history(
         second = replace(
             second,
             receipt=replace(second.receipt, lines=(line,)),
-            units=tuple(
-                replace(unit, receipt_line_id=line.id) for unit in second.units
-            ),
+            units=tuple(replace(unit, receipt_line_id=line.id) for unit in second.units),
         )
     else:
         second = replace(
@@ -264,9 +246,7 @@ def test_foreign_key_failure_rolls_back_all_rows(command, session_factory):
         SqlAlchemyUnitOfWork(session_factory) as writer,
     ):
         stage(writer, result)
-        writer.asset_units.add(
-            AssetUnit(uuid4(), SerialNumber("EXAMPLE", "ORPHAN"), uuid4())
-        )
+        writer.asset_units.add(AssetUnit(uuid4(), SerialNumber("EXAMPLE", "ORPHAN"), uuid4()))
         writer.commit()
     assert counts(session_factory) == (0, 0, 0)
 
@@ -292,9 +272,7 @@ def test_uow_rejects_nested_entry_and_commit_outside_context(session_factory):
         writer.commit()
 
 
-def test_database_constraint_rejects_serial_duplicate_without_service_precheck(
-    command, session_factory
-):
+def test_database_constraint_rejects_serial_duplicate_without_service_precheck(command, session_factory):
     result = register_inventory_receipt(command, SqlAlchemyUnitOfWork(session_factory))
     with session_factory() as session:
         serial = result.units[0].serial_number
@@ -368,21 +346,14 @@ def test_uow_can_be_reused_after_failure_and_success(command, session_factory):
 
 
 def test_service_commit_failure_preserves_previous_data(command, session_factory):
-    original = register_inventory_receipt(
-        command, SqlAlchemyUnitOfWork(session_factory)
-    )
+    original = register_inventory_receipt(command, SqlAlchemyUnitOfWork(session_factory))
     other = replace(
         command,
-        serial_numbers=tuple(
-            SerialNumber("OTHER-EXAMPLE", serial.value)
-            for serial in command.serial_numbers
-        ),
+        serial_numbers=tuple(SerialNumber("OTHER-EXAMPLE", serial.value) for serial in command.serial_numbers),
     )
     ids = iter([*(uuid4() for _ in range(28)), original.units[-1].id])
     with pytest.raises(RepositoryConflict):
-        register_inventory_receipt(
-            other, SqlAlchemyUnitOfWork(session_factory), new_id=lambda: next(ids)
-        )
+        register_inventory_receipt(other, SqlAlchemyUnitOfWork(session_factory), new_id=lambda: next(ids))
     assert counts(session_factory) == (1, 1, 27)
     with SqlAlchemyUnitOfWork(session_factory) as reader:
         assert reader.receipts.get(original.receipt.id) == original.receipt
