@@ -170,12 +170,15 @@ class AssetUnit:
     custody: CustodyAssignment | None = None
     lifecycle_state: LifecycleState | None = LifecycleState.ACTIVE
     last_effective_date: date | None = None
+    initial_custody: CustodyAssignment | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         _require_id(self.id)
         _require_id(self.receipt_line_id)
         if self.custody is not None and not isinstance(self.custody, CustodyAssignment):
             raise InvalidReceipt("custody must be an assignment or unknown")
+        if self.initial_custody is not None and not isinstance(self.initial_custody, CustodyAssignment):
+            raise InvalidReceipt("initial custody must be an assignment or unknown")
         if self.lifecycle_state is not None and not isinstance(self.lifecycle_state, LifecycleState):
             raise InvalidReceipt("lifecycle state must be explicit or unknown")
         if self.last_effective_date is not None and type(self.last_effective_date) is not date:
@@ -230,7 +233,14 @@ def register_serialized_receipt(
     if len(set(serials)) != len(serials):
         raise DuplicateSerialNumber("duplicate serial in namespace")
     units = tuple(
-        AssetUnit(new_id(), serial, line.id, custody=initial_custody, last_effective_date=effective_date)
+        AssetUnit(
+            new_id(),
+            serial,
+            line.id,
+            custody=initial_custody,
+            initial_custody=initial_custody,
+            last_effective_date=effective_date,
+        )
         for serial in serials
     )
     identities = {receipt.id, line.id, *(unit.id for unit in units)}

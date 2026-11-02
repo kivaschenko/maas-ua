@@ -25,8 +25,8 @@ asset units are separate aggregates accessed by their own repository.
 | `nomenclatures` | Existing text ID, unique stable code, name, unit, explicit tracking, optional default classification |
 | `receipt_documents` | UUID PK, document number, document date, effective date, aware creation timestamp, source |
 | `receipt_lines` | UUID PK, receipt FK, tuple position, nomenclature ID and tracking policy snapshot, quantity and unit, unit price and currency, ordered analytics pairs |
-| `asset_units` | UUID PK, origin line FK, serial namespace/value, current custody, lifecycle, latest effective date; unique exact namespace/value pair |
-| `movement_documents` | UUID PK, document/effective dates, creation timestamp, historical source/destination |
+| `asset_units` | UUID PK, origin line FK, serial namespace/value, immutable initial custody, current custody, lifecycle, latest effective date; unique exact namespace/value pair |
+| `movement_documents` | UUID PK, document/effective dates, creation timestamp, historical source/destination, new-record registration order |
 | `movement_lines` | Movement/unit FK pair, ordered position; each unit occurs once per document |
 
 `position` preserves the existing ordered line tuple; it is storage metadata, with
@@ -113,6 +113,12 @@ rewriting receipts. `0004` leaves legacy custody/lifecycle unknown and sets the
 known latest effective date from each original receipt. Such units cannot transfer
 until an approved onboarding workflow exists; do not invent values in a migration.
 
+`0005` adds initial custody and new-transfer order without filling legacy values.
+It is forward-only: downgrade refuses to erase those facts. New order is allocated
+at movement INSERT after asset row locks are held. See the
+[M4 reporting contract](../architecture/domain-model.md#20-milestone-4--historical-inventory-and-acquisition-valuation)
+for completeness, inclusive business-date semantics and read-only snapshot isolation.
+
 Create each catalog record once; subsequent receipts reuse it. The constructor now
 requires `code`, `name` and `unit_of_measure` in addition to the existing ID/tracking.
 Registration rejects missing or mismatched catalog snapshots. See the confirmed
@@ -145,5 +151,7 @@ Integration coverage includes cross-session reloads and detached snapshots,
 multiple-line ordering, exact monetary round trips, namespace/case comparisons,
 UUID and serial uniqueness, interleaved two-session serial races, foreign keys,
 database check constraints, rollback of already flushed rows, failed service
-commits preserving previous records, and UoW reuse. The migration test upgrades a
-fresh database, checks ORM/schema agreement, downgrades it, and upgrades it again.
+commits preserving previous records, and UoW reuse. Migration tests exercise the
+original reversible revisions through `0004`, verify ORM/head agreement, confirm
+`0005` downgrade refusal, and verify that populated legacy business fields remain
+unchanged after the forward upgrade.

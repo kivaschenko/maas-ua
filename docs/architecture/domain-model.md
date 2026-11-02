@@ -379,6 +379,114 @@ Scope exclusions and remaining questions:
 - No posting, depreciation, write-off, quantity-stock movement or Flask interface.
 - No legal document validation, custody acceptance/authorization, HR hierarchy or
   location catalog. References are opaque; their authoritative source is unresolved.
-- Lifecycle states beyond `ACTIVE`, legacy onboarding, serial-resolution UX and
-  reporting/as-of query APIs remain future work. Movement records retain dated
-  source/destination evidence; a complete historical-reporting service is not built.
+- Lifecycle states beyond `ACTIVE`, legacy onboarding and serial-resolution UX
+  remain future work. Section 20 defines the implemented Python reporting queries.
+
+## 20. Milestone 4 — historical inventory and acquisition valuation
+
+Approved by the user on 2026-11-02 and implemented as a read-side vertical slice.
+
+### Initial facts and movement order
+
+New receipt units record immutable `initial_custody` independently of mutable
+current custody. Transfers preserve it, and both fake and SQL repositories reject
+attempts to change it through `save`. A missing assignment remains `None`.
+Application immutability follows the same supported-API boundary as receipt origin;
+it does not protect against unrestricted administrative database writes.
+
+Migration `0005` adds the nullable initial location/party pair and nullable
+`movement_documents.registration_order`. It preserves every existing business
+field and leaves new fields NULL on legacy rows. It never infers initial custody
+from current custody or a movement source and never assigns legacy order by
+timestamps or UUIDs. Downgrade refuses to destroy these historical facts.
+
+New movement order comes from a PostgreSQL sequence default at INSERT. The
+transfer command already holds all selected asset locks in UUID order before
+staging/inserting its movement; waiting transactions allocate nothing while
+blocked on those locks. For a shared asset, the predecessor releases its locks
+only after commit/rollback, so successful same-day successors have larger orders.
+Concurrent tests verify lock waiting and persisted order across sessions.
+Sequence gaps after rollback are legitimate. Order is storage metadata rather
+than a new domain identity; it does not order unrelated business dates or prove
+global commit order. Direct inserts bypassing the transfer command do not have
+this chronological guarantee. Per-asset nondecreasing effective dates remain
+required, and same-day transfers remain allowed.
+
+### Date semantics and supported lifecycle
+
+`as_of` is a Python `date`, with inclusive end-of-day business semantics:
+receipt and transfer `effective_date <= as_of`. Datetimes and invalid date inputs
+are rejected. Document dates and aware `created_at` are evidence only. A later
+registration of a past-effective document may change an earlier report. There
+is no bitemporal cutoff, closed-period rule or new restriction on future dates.
+Positions before a known receipt date return `registered=False`, distinct from a
+missing unit (`AssetNotFound`) and registered units with unknown custody.
+
+All persisted receipts/movements represent completed commands. There are no
+draft/cancel flags, reversals, corrections or mutation workflows in M4. `ACTIVE`
+is the only supported lifecycle and transfers never change it. Unknown legacy
+lifecycle makes a balance incomplete; current lifecycle is not treated as a
+substitute for a future lifecycle-history implementation. Any additional lifecycle
+transitions will require dated history before historical reporting supports them.
+
+### Queries, scope and completeness
+
+Frozen query/result dataclasses and the small `InventoryReader` protocol live in
+`service_layer/inventory.py`. Handlers delegate without a command UoW. Core SELECTs
+in `adapters/inventory.py` implement all five operations:
+
+- `GetAssetBySerialNumber` uses the exact `(namespace, value)` key. Missing scope
+  is invalid; no match is `AssetNotFound`; a contradictory multiple match is an
+  explicit integrity error. Known provenance survives incomplete custody/history.
+- `GetAssetHistory` returns receipt and movement documents grouped by effective
+  day, with document dates, registration times and source/destination assignments.
+  Receipt precedes transfers on its day; proven transfer order uses the sequence.
+  Multiple same-day transfers with missing order set `HistoryDay.ordered=False`
+  and an ambiguity issue. Their presentation tuple is not asserted chronological.
+- `GetAssetPositionAsOf` reconstructs from initial custody and eligible movement
+  destinations, never current custody. It exposes registration and completeness
+  separately, checks custody continuity and rejects a movement before receipt as
+  an explicit issue. Ambiguous order exposes no chosen destination.
+- `GetInventoryBalance` and `GetInventoryValuation` reuse that SQL position
+  component. They count asset identities, not the original receipt quantity, and
+  aggregate with PostgreSQL COUNT/SUM, without loading domain aggregates.
+
+Every inventory group retains receipt/line provenance, nomenclature, source,
+unit acquisition price/currency, units of measure and stored receipt analytics.
+`group_by` optionally splits by location and/or custodian. Omitting either custody
+axis combines it within the same origin; NULL in such a group means an omitted
+grouping axis, not an invented custodian. Catalog classification defaults are
+never interpreted as historical accounting analytics.
+
+Filters support nomenclature, receipt, source, currency, receipt analytic pairs,
+historical location and responsible party. Static origin filters narrow the
+candidate set before completeness checks. Known positions outside a custody
+filter do not fail an unrelated report. Unresolved positions might match, so they
+remain in diagnostic scope rather than being silently omitted. Candidate counts
+and known acquisition values can therefore include possible matches and must not
+be interpreted as verified filtered balances.
+
+Incomplete provenance, initial custody/lifecycle, ambiguous order, broken custody
+chains or pre-receipt movements yield explicit issue codes. Incomplete reports
+return no groups, retain grouped diagnostic quantities/known monetary values, and
+raise `IncompleteInventory` on access to verified `count`/`totals`. Empty valid
+reports have count zero, empty groups and no currency totals. Lookup/history and
+position may return available facts with `complete=False`. Invalid stored analytic
+structures raise an explicit reporting-data error rather than inventing values.
+
+### Valuation, snapshot consistency and performance
+
+Acquisition value is the sum of original receipt-line unit prices for selected
+units. PostgreSQL unconstrained NUMERIC and Decimal preserve the existing exact
+precision policy; no currency quantization or FX conversion is introduced. Currency
+totals remain separate. Transfers conserve unit counts and acquisition value;
+these reports are not depreciation-adjusted carrying values or financial ledgers.
+
+Each reader call opens its own REPEATABLE READ, READ ONLY PostgreSQL transaction.
+All related SELECTs see the same snapshot; connection close rolls back, with no
+commit, autoflush or command-session reuse. Reports use three set-based SELECTs
+(diagnostics, currency totals, origin/custody groups), independent of asset count.
+The synthetic scale test checks query count and EXPLAIN ANALYZE/BUFFERS on 5,000
+assets with 2,750 movement lines. Existing FK/serial indexes and the new unique
+order constraint suffice for that measured plan; no speculative reporting index
+or materialized projection is added. This is not a production capacity guarantee.

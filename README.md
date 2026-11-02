@@ -4,7 +4,7 @@
 
 MAAS-UA is a Python application for traceable accounting of military property, initially focused on individually identified FPV drones and reusable unmanned aircraft systems (БпАК), with the longer-term goal of reconciling property registers and financial accounting.
 
-> **Status (reported as of November 2026):** Milestones M1 (receipt domain/service tests), M2 (PostgreSQL persistence and Unit of Work), M2.1 (nomenclature), and M3 (asset movements/transfers) are reported complete. M4 (inventory queries, provenance, history, and as-of balances) is next. This README was updated from the project planning conversation, **not from an inspection of the current repository**. Verify exact class names, CLI commands, API contracts, and implementation coverage against the code before merging.
+> **Status (2026-11-02):** M1–M3 and M4 are implemented in the repository. M4 adds immutable initial custody, persisted transfer order, serial lookup, history, historical positions, and acquisition-value inventory reports. These are Python use cases; no Flask reporting endpoints or operational UI are implemented.
 >
 > **Data handling:** Use synthetic records in code, fixtures, prompts, CI, documentation, logs, and public discussions. Do not publish real military inventory, serial numbers, unit identities, custody/location data, accounting documents, or operational details. Follow applicable authorization and data-handling requirements.
 
@@ -18,17 +18,17 @@ The system distinguishes property/custody accounting from financial accounting. 
 
 | Capability | Status |
 | --- | --- |
-| Register receipt with a homogeneous receipt line and 27 individual serial-tracked units | Reported implemented (M1) |
-| Unit and service-layer tests with fake repository | Reported implemented (M1) |
-| PostgreSQL persistence, SQLAlchemy repository/UoW, Alembic integration | Reported implemented (M2) |
-| Persistent `Nomenclature` and receipt references | Reported implemented (M2.1) |
-| Document-backed transfer/movement of serial-tracked units | Reported implemented (M3) |
-| Find unit by serial, show history/provenance/current custody and as-of stock valuation | Planned (M4) |
+| Register receipt with a homogeneous receipt line and individually tracked units | Implemented (M1) |
+| Unit and service-layer tests with fake infrastructure | Implemented (M1–M4) |
+| PostgreSQL persistence, SQLAlchemy repository/UoW, Alembic integration | Implemented (M2) |
+| Persistent `Nomenclature` and receipt references | Implemented (M2.1) |
+| Document-backed transfer/movement of serial-tracked units | Implemented (M3) |
+| Exact serial lookup, provenance/history, historical custody, quantity and acquisition valuation | Implemented (M4); incomplete history is explicit |
 | Write-off and reversal/corrections | Planned; business rules to confirm (M5+) |
 | Fixed-asset amortization, accounting entries, reconciliation | Planned (M6+) |
 | Flask UI, Excel import/export integration and user-facing reports | Planned integration (M7+); verify any pre-existing scripts separately |
 
-The status table is intentionally conservative. A reported milestone does **not** imply all production-readiness, authorization, error-recovery, or audit requirements have been validated.
+Implemented milestones do **not** imply production authorization, legal accounting compliance, or a complete financial ledger.
 
 ## Stack
 
@@ -91,11 +91,11 @@ A homogeneous receipt line of 27 FPV drones has 27 `AssetUnit` records, each poi
 
 ## Milestone roadmap
 
-- **M1 — Completed (reported):** receipt registration domain, validations, unit and fake-UoW/service tests.
-- **M2 — Completed (reported):** SQLAlchemy/PostgreSQL repository and transaction persistence, Alembic, integration tests.
-- **M2.1 — Completed (reported):** nomenclature entity and persistence, receipt-line linkage.
-- **M3 — Completed (reported):** transfer command, movement document/history, custody changes, tests.
-- **M4 — Next:** traceability/read-side queries, current and historical custody, inventory balance and acquisition valuation, filters and grouping, PostgreSQL integration tests.
+- **M1 — Implemented:** receipt registration domain, validations, unit and fake-UoW/service tests.
+- **M2 — Implemented:** SQLAlchemy/PostgreSQL repository and transaction persistence, Alembic, integration tests.
+- **M2.1 — Implemented:** nomenclature entity and persistence, receipt-line linkage.
+- **M3 — Implemented:** transfer command, movement document/history, custody changes, tests.
+- **M4 — Implemented:** immutable initial custody, transfer order, traceability queries, historical quantity/acquisition valuation and PostgreSQL tests.
 - **M5 — Proposed:** document-supported write-off of individual units, preserved history, correction policy.
 - **M6 — Proposed:** fixed-asset accounting, depreciation, ledger analytics, reconciliation.
 - **M7 — Proposed:** Flask web workflows, Excel import/export, reports and regression tests.
@@ -104,7 +104,7 @@ The roadmap is a planning tool, not an assertion of final approved accounting fu
 
 ## M4 scope: Inventory, Traceability & Balances
 
-Target query use cases (adapt names to codebase):
+Immutable query inputs and result DTOs live in `service_layer/inventory.py`; `adapters/inventory.py` implements `InventoryReader` with SQLAlchemy Core:
 
 - `GetAssetBySerialNumber`: find a tracked unit under the agreed serial uniqueness policy.
 - `GetAssetHistory`: receipt and chronologically ordered confirmed movement records, with document references.
@@ -112,9 +112,40 @@ Target query use cases (adapt names to codebase):
 - `GetInventoryBalance`: group units by nomenclature, source/receipt, custody/location and agreed accounting dimensions for a date.
 - `GetInventoryValuation`: calculate acquisition-value totals using receipt-line prices with `Decimal`, with no depreciation or unimplemented write-offs assumed.
 
-**Key questions before implementation:** Which timestamp is legally/business-relevant (`effective_date`, document date, registration time)? Are transfers always chronological? How are corrections, canceled documents, and backdated records handled? Is an initial custody assignment established at receipt? What does a transfer between custodians mean when the physical location is unchanged?
+`as_of` means **end of the business date**, including receipts/transfers with `effective_date <= as_of`. Document date and `created_at` are displayed evidence, not reporting cutoffs. Late registration can change earlier reports; reporting does not reproduce what the system knew at an earlier time. Before receipt, position returns `registered=False`; a missing asset raises `AssetNotFound`.
 
-M4 is read-only. No new posting, write-off, reversal, or retroactive editing functionality should be added in this milestone. For an as-of query, never substitute the current `AssetUnit` state for historical state. Use confirmed operations and the agreed business date. If historical reconstruction is impossible with existing M3 data, document the gap and propose the smallest safe schema/data migration before implementing the query.
+New receipts preserve `AssetUnit.initial_custody` separately from current custody. Transfers use their stored destinations and a persisted `registration_order`, allocated at INSERT after selected assets have been locked in UUID order. Sequence gaps are allowed; its order is meaningful for overlapping assets, not a global business-date or commit-time ordering. UUID and creation time never decide same-day chronology. Each history day exposes `ordered`; legacy same-day ties are explicitly unordered.
+
+`GetInventoryBalance` and `GetInventoryValuation` share the position query. Filters support nomenclature ID, receipt UUID, source, currency, receipt analytics, historical location and responsible party. Every group retains original receipt/line, source, nomenclature, exact price, currency, unit and receipt analytics. `group_by` selects custody splits: `("location", "custodian")` by default, either dimension, or `()` to combine custody within each origin. Catalog classification defaults are not historical accounting dimensions.
+
+Reports expose `complete`, `groups`, `diagnostics`, `candidate_count` and `known_acquisition_totals`. Incomplete reports suppress groups; accessing verified `count` or `totals` raises `IncompleteInventory`. Known diagnostic values are not verified balances. Unknown initial custody/lifecycle, ambiguous movement order, broken custody chains and missing provenance cannot disappear from accepted totals. Static filters narrow the scope first; known historical positions outside custody filters are excluded. An unresolved position might match a custody filter and remains diagnostic. Empty valid reports have zero count and no currency totals. Asset lookup/history retain known information with completeness indicators.
+
+Amounts use each asset's original receipt-line price, PostgreSQL `NUMERIC` and `Decimal`, with no new rounding. Currency totals remain separate. These are **acquisition values**, not depreciation-adjusted carrying values or financial ledger balances.
+
+Each read operation owns a PostgreSQL **REPEATABLE READ, READ ONLY** transaction. Multiple SELECTs share one snapshot; closing the connection rolls back without commit. There is no ORM autoflush, aggregate loading, per-asset reporting loop, or command-UoW change. Normal reporting uses three aggregate SELECTs independent of asset count.
+
+Example using the existing configured engine:
+
+```python
+from datetime import date
+
+from maas_ua.adapters.inventory import SqlAlchemyInventoryReader
+from maas_ua.bootstrap import make_session_factory
+from maas_ua.service_layer.inventory import GetInventoryValuation, get_inventory_valuation
+
+factory = make_session_factory()  # Explicit DATABASE_URL; does not migrate.
+engine = factory.kw["bind"]
+try:
+    report = get_inventory_valuation(GetInventoryValuation(as_of=date(2026, 2, 10)), SqlAlchemyInventoryReader(engine))
+    if report.complete:
+        verified_count, verified_currency_totals = report.count, report.totals
+    else:
+        issues = report.diagnostics  # No verified balance is available.
+finally:
+    engine.dispose()
+```
+
+Migration `0005` follows `0004` and is **forward-only**: downgrade refuses to erase audit facts. It adds initial custody and order without filling legacy records from current state, timestamps, UUIDs or the first movement. Old custody/order remain unknown; no onboarding/repair workflow is supplied. Apply it to a reviewed deployment target through the existing Alembic procedure; tests migrate only disposable databases. No draft/cancel/reversal, lifecycle transition, depreciation, write-off or posting workflow is added. Read guarantees assume records are created through the supported commands, not arbitrary administrative SQL.
 
 ### Acceptance scenario (synthetic)
 
@@ -137,15 +168,23 @@ Many fast unit tests for domain behavior
 
 For M4, domain calculations and query result composition can be unit-tested with fixtures/fakes. SQL aggregation, ordering, grouping, date filtering, monetary precision and reference integrity **must be covered by real PostgreSQL integration tests**. Test negative scenarios, zero results, boundary dates, and contradictory/incomplete data. Production data must never enter tests.
 
-Run existing project commands as defined in `pyproject.toml`. Typical commands, if applicable:
+Fast tests need no PostgreSQL:
 
 ```bash
-uv sync
-uv run pytest
+uv run pytest tests/unit tests/service_layer
 uv run ruff check .
-uv run ruff format --check .
-uv run alembic upgrade head
 ```
+
+Full verification on the existing isolated test service:
+
+```bash
+docker compose -f compose.test.yaml up -d --wait
+export TEST_DATABASE_URL='postgresql+psycopg://maas_test:test_password@127.0.0.1:55432/maas_ua_test'
+uv run pytest -q --tb=short
+uv run ruff check .
+```
+
+The migration tests check Alembic/ORM agreement, historical revision reversibility, `0005` downgrade refusal and preservation of populated legacy rows. The scale test checks fixed reporting query count and runs `EXPLAIN (ANALYZE, BUFFERS)` on 5,000 synthetic assets and 2,750 movement lines. A local position aggregation measured approximately 13 ms; this is diagnostic, not a production performance guarantee. No extra reporting indexes were justified by that plan. Formatting checks for M4 use changed Python files; unrelated historical formatting differences remain untouched.
 
 Do not run Alembic against production or shared databases without an approved deployment/migration procedure.
 

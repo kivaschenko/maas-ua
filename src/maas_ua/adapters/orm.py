@@ -15,6 +15,7 @@ from sqlalchemy import (
     ForeignKey,
     MetaData,
     Numeric,
+    Sequence,
     Text,
     UniqueConstraint,
 )
@@ -132,7 +133,16 @@ class ReceiptLineRecord(Base):
 
 class AssetUnitRecord(Base):
     __tablename__ = "asset_units"
-    __table_args__ = (UniqueConstraint("serial_namespace", "serial_value", name="uq_asset_units_serial"),)
+    __table_args__ = (
+        UniqueConstraint("serial_namespace", "serial_value", name="uq_asset_units_serial"),
+        CheckConstraint(
+            "(initial_location_ref IS NULL AND initial_party_ref IS NULL) OR "
+            "(initial_location_ref IS NOT NULL AND initial_party_ref IS NOT NULL "
+            "AND initial_location_ref <> '' AND initial_location_ref = btrim(initial_location_ref) "
+            "AND initial_party_ref <> '' AND initial_party_ref = btrim(initial_party_ref))",
+            name="initial_custody_pair",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
     receipt_line_id: Mapped[UUID] = mapped_column(ForeignKey("receipt_lines.id"), index=True)
@@ -144,6 +154,8 @@ class AssetUnitRecord(Base):
     custody_party_ref: Mapped[str | None] = mapped_column(Text)
     lifecycle_state: Mapped[str | None] = mapped_column(Text)
     last_effective_date: Mapped[date | None]
+    initial_location_ref: Mapped[str | None] = mapped_column(Text)
+    initial_party_ref: Mapped[str | None] = mapped_column(Text)
 
 
 def receipt_to_record(receipt: ReceiptDocument) -> ReceiptDocumentRecord:
@@ -202,6 +214,8 @@ def unit_to_record(unit: AssetUnit) -> AssetUnitRecord:
         custody_party_ref=unit.custody.responsible_party_ref if unit.custody else None,
         lifecycle_state=unit.lifecycle_state.value if unit.lifecycle_state else None,
         last_effective_date=unit.last_effective_date,
+        initial_location_ref=unit.initial_custody.location_ref if unit.initial_custody else None,
+        initial_party_ref=unit.initial_custody.responsible_party_ref if unit.initial_custody else None,
     )
 
 
@@ -217,12 +231,22 @@ def unit_from_record(record: AssetUnitRecord) -> AssetUnit:
         ),
         lifecycle_state=LifecycleState(record.lifecycle_state) if record.lifecycle_state else None,
         last_effective_date=record.last_effective_date,
+        initial_custody=(
+            CustodyAssignment(record.initial_location_ref, record.initial_party_ref)
+            if record.initial_location_ref is not None
+            else None
+        ),
     )
+
+
+movement_order = Sequence("movement_registration_order", metadata=Base.metadata)
 
 
 class MovementDocumentRecord(Base):
     __tablename__ = "movement_documents"
     __table_args__ = (
+        UniqueConstraint("registration_order", name="uq_movement_documents_registration_order"),
+        CheckConstraint("registration_order > 0", name="registration_order_positive"),
         CheckConstraint(
             "source_location_ref <> destination_location_ref OR source_party_ref <> destination_party_ref",
             name="distinct_assignments",
@@ -244,6 +268,9 @@ class MovementDocumentRecord(Base):
     document_date: Mapped[date]
     effective_date: Mapped[date]
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # Assigned at INSERT/commit, after the command has locked every selected unit.
+    # Nullable solely because the migration never invents an order for old rows.
+    registration_order: Mapped[int | None] = mapped_column(BigInteger, server_default=movement_order.next_value())
     source_location_ref: Mapped[str] = mapped_column(Text)
     source_party_ref: Mapped[str] = mapped_column(Text)
     destination_location_ref: Mapped[str] = mapped_column(Text)

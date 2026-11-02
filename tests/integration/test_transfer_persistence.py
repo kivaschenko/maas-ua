@@ -200,6 +200,10 @@ def test_concurrent_transfer_waits_for_row_lock_and_revalidates_latest_custody(s
             first.movements.add(result.movement)
             for unit in result.units:
                 first.asset_units.save(unit)
+            with session_factory() as observer:
+                sequence_before = observer.execute(
+                    text("SELECT last_value, is_called FROM movement_registration_order")
+                ).one()
             future = pool.submit(transfer_assets, follow, ObservedUnitOfWork(session_factory))
             try:
                 assert ready.wait(5)
@@ -214,6 +218,11 @@ def test_concurrent_transfer_waits_for_row_lock_and_revalidates_latest_custody(s
                     Event().wait(0.01)
                 assert blocked, "competing transfer did not wait on the held PostgreSQL row locks"
                 assert not future.done()
+                with session_factory() as observer:
+                    assert (
+                        observer.execute(text("SELECT last_value, is_called FROM movement_registration_order")).one()
+                        == sequence_before
+                    )
             finally:
                 first.commit()
         if case == "duplicate_document":
@@ -225,6 +234,12 @@ def test_concurrent_transfer_waits_for_row_lock_and_revalidates_latest_custody(s
         else:
             assert future.result(timeout=5).units[0].custody == follow.destination
     assert counts(session_factory) == ((1, 12) if follow_source == SOURCE else (2, 24))
+    if case == "follow_on":
+        with session_factory() as reader:
+            assert (
+                reader.get(MovementDocumentRecord, request.movement_id).registration_order
+                < reader.get(MovementDocumentRecord, follow.movement_id).registration_order
+            )
 
 
 def test_lock_timeout_is_reported_as_a_retryable_repository_conflict(stored, session_factory):
@@ -256,3 +271,39 @@ def test_backdated_followup_is_rejected_after_reload(stored, session_factory):
             SqlAlchemyUnitOfWork(session_factory),
         )
     assert counts(session_factory) == (1, 12)
+
+
+def test_same_day_order_is_persisted_independently_of_clocks_and_uuid(stored, session_factory):
+    request = command(stored)
+    transfer_assets(request, SqlAlchemyUnitOfWork(session_factory), clock=lambda: datetime(2026, 3, 1, tzinfo=UTC))
+    follow = replace(request, movement_id=uuid4(), source=DESTINATION, destination=SOURCE)
+    transfer_assets(follow, SqlAlchemyUnitOfWork(session_factory), clock=lambda: datetime(2026, 1, 1, tzinfo=UTC))
+    with session_factory() as session:
+        first = session.get(MovementDocumentRecord, request.movement_id)
+        second = session.get(MovementDocumentRecord, follow.movement_id)
+        assert first.registration_order < second.registration_order
+    with SqlAlchemyUnitOfWork(session_factory) as reader:
+        for unit in stored.units:
+            assert reader.asset_units.get(unit.id).initial_custody == SOURCE
+
+
+def test_initial_custody_cannot_be_changed_by_save(stored, session_factory):
+    with SqlAlchemyUnitOfWork(session_factory) as writer:
+        unit = writer.asset_units.get(stored.units[0].id)
+        with pytest.raises(RepositoryConflict):
+            writer.asset_units.save(replace(unit, initial_custody=DESTINATION))
+
+
+def test_initial_custody_pair_is_a_database_invariant(stored, session_factory):
+    with session_factory() as session:
+        session.get(AssetUnitRecord, stored.units[0].id).initial_party_ref = None
+        with pytest.raises(IntegrityError):
+            session.commit()
+        session.rollback()
+
+
+def test_selected_asset_locks_are_acquired_in_uuid_order(stored, session_factory):
+    selected = tuple(unit.id for unit in stored.units[:12])
+    with SqlAlchemyUnitOfWork(session_factory) as writer:
+        locked = writer.asset_units.get_for_update(tuple(reversed(selected)))
+        assert tuple(unit.id for unit in locked) == tuple(sorted(selected))
