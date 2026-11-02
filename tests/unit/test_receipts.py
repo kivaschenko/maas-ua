@@ -5,6 +5,7 @@ from uuid import UUID
 
 import pytest
 
+from maas_ua.domain.custody import CustodyAssignment
 from maas_ua.domain.receipts import (
     InvalidReceipt,
     Money,
@@ -33,6 +34,13 @@ def receipt_input(**changes):
         "analytics": (("example-dimension", "EXAMPLE-CODE"),),
     }
     return values | changes
+
+
+def test_initial_custody_is_recorded_separately_and_unknown_stays_unknown():
+    assignment = CustodyAssignment("EXAMPLE-A", "EXAMPLE-A")
+    assigned = register_serialized_receipt(**receipt_input(initial_custody=assignment))
+    assert all(unit.initial_custody == assignment and unit.custody == assignment for unit in assigned.units)
+    assert all(unit.initial_custody is None for unit in register_serialized_receipt(**receipt_input()).units)
 
 
 def test_registers_homogeneous_receipt_with_independent_unit_identities():

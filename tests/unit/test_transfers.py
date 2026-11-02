@@ -86,6 +86,14 @@ def test_same_day_followup_is_allowed_but_earlier_posting_is_rejected():
         transfer_assets(**(values | {"effective_date": date(2026, 1, 31)}))
 
 
+def test_initial_custody_survives_multiple_transfers():
+    original = replace(units()[0], initial_custody=SOURCE)
+    first = transfer_assets(**inputs((original,)))
+    second = transfer_assets(**(inputs(first.units) | {"source": DESTINATION, "destination": SOURCE}))
+    assert first.units[0].initial_custody == SOURCE
+    assert second.units[0].initial_custody == SOURCE
+
+
 @pytest.mark.parametrize(
     "changes",
     [

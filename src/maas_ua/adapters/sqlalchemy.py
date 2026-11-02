@@ -131,10 +131,18 @@ class SqlAlchemyAssetUnitRepository:
     def save(self, unit: AssetUnit) -> None:
         with self.session.no_autoflush:
             record = self.session.get(AssetUnitRecord, unit.id)
-        if record is None or (record.receipt_line_id, record.serial_namespace, record.serial_value) != (
+        if record is None or (
+            record.receipt_line_id,
+            record.serial_namespace,
+            record.serial_value,
+            record.initial_location_ref,
+            record.initial_party_ref,
+        ) != (
             unit.receipt_line_id,
             unit.serial_number.namespace,
             unit.serial_number.value,
+            unit.initial_custody.location_ref if unit.initial_custody else None,
+            unit.initial_custody.responsible_party_ref if unit.initial_custody else None,
         ):
             raise RepositoryConflict("unit must exist and origin must remain unchanged")
         record.custody_location_ref = unit.custody.location_ref if unit.custody else None

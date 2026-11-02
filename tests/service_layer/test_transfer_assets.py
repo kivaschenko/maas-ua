@@ -160,3 +160,10 @@ def test_fake_concurrent_snapshot_cannot_overwrite_a_transfer(stored):
         stale.asset_units.save(replace(unit, custody=CustodyAssignment("OTHER", "OTHER")))
         with pytest.raises(RepositoryConflict, match="store changed"):
             stale.commit()
+
+
+def test_fake_preserves_initial_custody_on_save(stored):
+    store, original = stored
+    with FakeUnitOfWork(store) as writer:
+        with pytest.raises(RepositoryConflict):
+            writer.asset_units.save(replace(original.units[0], initial_custody=DESTINATION))

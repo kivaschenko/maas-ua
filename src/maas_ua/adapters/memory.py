@@ -107,9 +107,10 @@ class FakeAssetUnitRepository:
 
     def save(self, unit: AssetUnit) -> None:
         previous = self._items.get(unit.id)
-        if previous is None or (previous.receipt_line_id, previous.serial_number) != (
+        if previous is None or (previous.receipt_line_id, previous.serial_number, previous.initial_custody) != (
             unit.receipt_line_id,
             unit.serial_number,
+            unit.initial_custody,
         ):
             raise RepositoryConflict("unit must exist and origin must remain unchanged")
         self._items[unit.id] = unit
