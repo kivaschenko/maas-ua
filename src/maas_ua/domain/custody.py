@@ -6,6 +6,7 @@ from enum import StrEnum
 
 class LifecycleState(StrEnum):
     ACTIVE = "ACTIVE"
+    WRITTEN_OFF = "WRITTEN_OFF"
 
 
 @dataclass(frozen=True)

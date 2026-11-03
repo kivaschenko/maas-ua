@@ -25,6 +25,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from maas_ua.domain.custody import CustodyAssignment, LifecycleState
 from maas_ua.domain.movements import MovementDocument, MovementLine
 from maas_ua.domain.receipts import (
+    AccountingClassification,
     AssetUnit,
     Money,
     Nomenclature,
@@ -34,6 +35,7 @@ from maas_ua.domain.receipts import (
     SerialNumber,
     TrackingPolicy,
 )
+from maas_ua.domain.write_offs import WriteOffDocument, WriteOffLine
 
 
 class Base(DeclarativeBase):
@@ -107,6 +109,10 @@ class ReceiptLineRecord(Base):
     __table_args__ = (
         UniqueConstraint("receipt_id", "position", name="uq_receipt_lines_position"),
         CheckConstraint("position >= 0", name="position_nonnegative"),
+        CheckConstraint(
+            "accounting_classification IS NULL OR accounting_classification IN ('INVENTORY', 'FIXED_ASSET')",
+            name="accounting_classification",
+        ),
         CheckConstraint("quantity_count > 0", name="quantity_positive"),
         CheckConstraint("quantity_unit = 'pcs'", name="quantity_unit_pcs"),
         CheckConstraint("tracking_policy = 'SERIALIZED'", name="tracking_serialized"),
@@ -122,6 +128,7 @@ class ReceiptLineRecord(Base):
     nomenclature_id: Mapped[str] = mapped_column(ForeignKey("nomenclatures.id"))
     nomenclature: Mapped[NomenclatureRecord] = relationship()
     tracking_policy: Mapped[str] = mapped_column(Text)
+    accounting_classification: Mapped[str | None] = mapped_column(Text)
     quantity_count: Mapped[int] = mapped_column(BigInteger)
     quantity_unit: Mapped[str] = mapped_column(Text)
     # No precision/scale: the confirmed domain currently performs no quantization.
@@ -135,6 +142,9 @@ class AssetUnitRecord(Base):
     __tablename__ = "asset_units"
     __table_args__ = (
         UniqueConstraint("serial_namespace", "serial_value", name="uq_asset_units_serial"),
+        CheckConstraint(
+            "lifecycle_state IS NULL OR lifecycle_state IN ('ACTIVE', 'WRITTEN_OFF')", name="lifecycle_state"
+        ),
         CheckConstraint(
             "(initial_location_ref IS NULL AND initial_party_ref IS NULL) OR "
             "(initial_location_ref IS NOT NULL AND initial_party_ref IS NOT NULL "
@@ -170,6 +180,7 @@ def receipt_to_record(receipt: ReceiptDocument) -> ReceiptDocumentRecord:
             ReceiptLineRecord(
                 id=line.id,
                 position=position,
+                accounting_classification=line.accounting_classification,
                 nomenclature_id=line.nomenclature.id,
                 tracking_policy=line.nomenclature.tracking_policy.value,
                 quantity_count=line.quantity.count,
@@ -198,6 +209,9 @@ def receipt_from_record(record: ReceiptDocumentRecord) -> ReceiptDocument:
                 quantity=Quantity(line.quantity_count, line.quantity_unit),
                 unit_price=Money(line.unit_price, line.currency),
                 analytics=tuple(tuple(pair) for pair in line.analytics),
+                accounting_classification=(
+                    AccountingClassification(line.accounting_classification) if line.accounting_classification else None
+                ),
             )
             for line in record.lines
         ),
@@ -317,4 +331,65 @@ def movement_from_record(record: MovementDocumentRecord) -> MovementDocument:
         source=CustodyAssignment(record.source_location_ref, record.source_party_ref),
         destination=CustodyAssignment(record.destination_location_ref, record.destination_party_ref),
         lines=tuple(MovementLine(line.asset_unit_id) for line in record.lines),
+    )
+
+
+class WriteOffDocumentRecord(Base):
+    __tablename__ = "write_off_documents"
+    __table_args__ = (
+        CheckConstraint("effective_date >= authorization_date", name="acceptance_after_authorization"),
+        *(
+            CheckConstraint(f"{column} <> '' AND {column} = btrim({column})", name=f"{column}_text")
+            for column in ("document_number", "authorization_reference")
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    document_number: Mapped[str] = mapped_column(Text)
+    document_date: Mapped[date]
+    authorization_reference: Mapped[str] = mapped_column(Text)
+    authorization_date: Mapped[date]
+    effective_date: Mapped[date]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    lines: Mapped[list[WriteOffLineRecord]] = relationship(order_by="WriteOffLineRecord.position")
+
+
+class WriteOffLineRecord(Base):
+    __tablename__ = "write_off_lines"
+    __table_args__ = (
+        UniqueConstraint("write_off_id", "position", name="uq_write_off_lines_position"),
+        UniqueConstraint("asset_unit_id", name="uq_write_off_lines_asset_unit_id"),
+        CheckConstraint("position >= 0", name="position_nonnegative"),
+    )
+    write_off_id: Mapped[UUID] = mapped_column(ForeignKey("write_off_documents.id"), primary_key=True)
+    asset_unit_id: Mapped[UUID] = mapped_column(ForeignKey("asset_units.id"), primary_key=True)
+    position: Mapped[int]
+
+
+def write_off_to_record(document: WriteOffDocument) -> WriteOffDocumentRecord:
+    return WriteOffDocumentRecord(
+        id=document.id,
+        document_number=document.document_number,
+        document_date=document.document_date,
+        authorization_reference=document.authorization_reference,
+        authorization_date=document.authorization_date,
+        effective_date=document.effective_date,
+        created_at=document.created_at,
+        lines=[
+            WriteOffLineRecord(asset_unit_id=line.asset_unit_id, position=position)
+            for position, line in enumerate(document.lines)
+        ],
+    )
+
+
+def write_off_from_record(record: WriteOffDocumentRecord) -> WriteOffDocument:
+    return WriteOffDocument(
+        id=record.id,
+        document_number=record.document_number,
+        document_date=record.document_date,
+        authorization_reference=record.authorization_reference,
+        authorization_date=record.authorization_date,
+        effective_date=record.effective_date,
+        created_at=record.created_at,
+        lines=tuple(WriteOffLine(line.asset_unit_id) for line in record.lines),
     )

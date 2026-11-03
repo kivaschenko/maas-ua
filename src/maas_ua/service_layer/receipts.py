@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 
 from maas_ua.domain.custody import CustodyAssignment
 from maas_ua.domain.receipts import (
+    AccountingClassification,
     DuplicateSerialNumber,
     InvalidReceipt,
     Money,
@@ -34,6 +35,7 @@ class RegisterInventoryReceipt:
     serial_numbers: tuple[SerialNumber, ...]
     analytics: tuple[tuple[str, str], ...] = ()
     initial_custody: CustodyAssignment | None = None
+    accounting_classification: AccountingClassification | None = None
 
 
 def _utc_now() -> datetime:
@@ -61,6 +63,7 @@ def register_inventory_receipt(
         serial_numbers=command.serial_numbers,
         analytics=command.analytics,
         initial_custody=command.initial_custody,
+        accounting_classification=command.accounting_classification,
         new_id=new_id,
     )
     with uow:

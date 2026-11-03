@@ -6,6 +6,7 @@ from uuid import UUID
 
 from maas_ua.domain.movements import MovementDocument
 from maas_ua.domain.receipts import AssetUnit, Nomenclature, ReceiptDocument, SerialNumber
+from maas_ua.domain.write_offs import WriteOffAsset, WriteOffDocument
 
 
 class RepositoryConflict(RuntimeError):
@@ -41,6 +42,8 @@ class AssetUnitRepository(Protocol):
 
     def save(self, unit: AssetUnit) -> None: ...
 
+    def write_off_facts(self, units: tuple[AssetUnit, ...]) -> tuple[WriteOffAsset, ...]: ...
+
 
 class MovementRepository(Protocol):
     def add(self, movement: MovementDocument) -> None: ...
@@ -48,7 +51,14 @@ class MovementRepository(Protocol):
     def get(self, movement_id: UUID) -> MovementDocument | None: ...
 
 
+class WriteOffRepository(Protocol):
+    def add(self, document: WriteOffDocument) -> None: ...
+
+    def get(self, document_id: UUID) -> WriteOffDocument | None: ...
+
+
 class UnitOfWork(Protocol):
+    write_offs: WriteOffRepository
     movements: MovementRepository
     nomenclatures: NomenclatureRepository
     receipts: ReceiptRepository

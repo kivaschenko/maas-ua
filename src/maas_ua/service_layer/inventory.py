@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Protocol
 from uuid import UUID
 
-from maas_ua.domain.custody import CustodyAssignment
+from maas_ua.domain.custody import CustodyAssignment, LifecycleState
 from maas_ua.domain.receipts import InvalidReceipt, SerialNumber
 
 
@@ -50,8 +50,11 @@ class InventoryFilter:
     location_ref: str | None = None
     responsible_party_ref: str | None = None
     analytics: tuple[tuple[str, str], ...] = ()
+    lifecycle_state: LifecycleState | None = LifecycleState.ACTIVE
 
     def __post_init__(self):
+        if self.lifecycle_state is not None and not isinstance(self.lifecycle_state, LifecycleState):
+            raise InvalidInventoryQuery("lifecycle filter must be an explicit state or None")
         for value in (self.nomenclature_id, self.source, self.currency, self.location_ref, self.responsible_party_ref):
             if value is not None:
                 _text(value)
@@ -143,6 +146,18 @@ class ReceiptOrigin:
     currency: str
     unit_of_measure: str
     analytics: tuple[tuple[str, str], ...]
+    accounting_classification: str | None = None
+
+
+@dataclass(frozen=True)
+class WriteOffInfo:
+    document_id: UUID
+    document_number: str
+    document_date: date
+    authorization_reference: str
+    authorization_date: date
+    effective_date: date
+    created_at: datetime
 
 
 @dataclass(frozen=True)
@@ -154,6 +169,7 @@ class AssetDetails:
     initial_custody: CustodyAssignment | None
     lifecycle_state: str | None
     issues: tuple[str, ...]
+    write_off: WriteOffInfo | None = None
 
     @property
     def complete(self):
@@ -171,6 +187,8 @@ class AssetEvent:
     source: CustodyAssignment | None
     destination: CustodyAssignment | None
     registration_order: int | None
+    authorization_reference: str | None = None
+    authorization_date: date | None = None
 
 
 @dataclass(frozen=True)
@@ -198,6 +216,8 @@ class AssetPosition:
     registered: bool | None
     custody: CustodyAssignment | None
     issues: tuple[str, ...]
+    lifecycle_state: str | None = None
+    write_off: WriteOffInfo | None = None
 
     @property
     def complete(self):
@@ -218,6 +238,7 @@ class InventoryGroup:
     responsible_party_ref: str | None
     count: int
     acquisition_value: Decimal
+    lifecycle_state: str | None = None
 
 
 @dataclass(frozen=True)

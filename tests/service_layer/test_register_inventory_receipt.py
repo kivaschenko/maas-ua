@@ -202,3 +202,22 @@ def test_catalog_metadata_cannot_be_spoofed(command):
     with pytest.raises(InvalidReceipt, match="nomenclature"):
         register_inventory_receipt(replace(command, nomenclature=replace(command.nomenclature, name="Changed")), uow)
     assert not store.receipts
+
+
+def test_classification_is_supplied_explicitly_and_not_inferred_from_catalog(command):
+    from maas_ua.domain.receipts import AccountingClassification
+
+    catalog = replace(command.nomenclature, default_accounting_classification="EXAMPLE-DEFAULT")
+    store = FakeStore(nomenclatures=(catalog,))
+    explicit = replace(command, nomenclature=catalog, accounting_classification=AccountingClassification.INVENTORY)
+    registered = register_inventory_receipt(explicit, FakeUnitOfWork(store))
+    assert (
+        store.receipts[registered.receipt.id].lines[0].accounting_classification is AccountingClassification.INVENTORY
+    )
+    other = replace(
+        command,
+        nomenclature=catalog,
+        serial_numbers=tuple(SerialNumber("OTHER", s.value) for s in command.serial_numbers),
+    )
+    unknown = register_inventory_receipt(other, FakeUnitOfWork(store))
+    assert unknown.receipt.lines[0].accounting_classification is None

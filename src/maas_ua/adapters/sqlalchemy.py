@@ -2,18 +2,22 @@
 
 from collections.abc import Callable
 from types import TracebackType
-from typing import Self
+from typing import NoReturn, Self
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, selectinload
 
 from maas_ua.adapters.orm import (
     AssetUnitRecord,
     MovementDocumentRecord,
+    MovementLineRecord,
     NomenclatureRecord,
     ReceiptDocumentRecord,
+    ReceiptLineRecord,
+    WriteOffDocumentRecord,
+    WriteOffLineRecord,
     movement_from_record,
     movement_to_record,
     nomenclature_from_record,
@@ -22,19 +26,24 @@ from maas_ua.adapters.orm import (
     receipt_to_record,
     unit_from_record,
     unit_to_record,
+    write_off_from_record,
+    write_off_to_record,
 )
 from maas_ua.domain.movements import DuplicateMovement, MovementDocument
 from maas_ua.domain.receipts import (
+    AccountingClassification,
     AssetUnit,
     DuplicateSerialNumber,
     Nomenclature,
     ReceiptDocument,
     SerialNumber,
+    TrackingPolicy,
 )
+from maas_ua.domain.write_offs import AlreadyWrittenOff, DuplicateWriteOff, WriteOffAsset, WriteOffDocument
 from maas_ua.ports import DuplicateNomenclatureCode, RepositoryConflict
 
 
-def _translate_concurrency(error: OperationalError) -> None:
+def _translate_concurrency(error: OperationalError) -> NoReturn:
     if getattr(error.orig, "sqlstate", None) in {"55P03", "40P01", "40001"}:
         raise RepositoryConflict("concurrent asset transaction; retry the complete command") from None
     raise error
@@ -80,7 +89,10 @@ class SqlAlchemyReceiptRepository:
                 None,
             )
             with self.session.no_autoflush:
-                line.nomenclature = pending or self.session.get(NomenclatureRecord, line.nomenclature_id)
+                nomenclature = pending or self.session.get(NomenclatureRecord, line.nomenclature_id)
+            if nomenclature is None:
+                raise RepositoryConflict("receipt nomenclature must already exist")
+            line.nomenclature = nomenclature
         self.session.add(record)
 
     def get(self, receipt_id: UUID) -> ReceiptDocument | None:
@@ -127,6 +139,49 @@ class SqlAlchemyAssetUnitRepository:
                 return tuple(unit_from_record(record) for record in self.session.scalars(statement))
         except OperationalError as error:
             _translate_concurrency(error)
+
+    def write_off_facts(self, units: tuple[AssetUnit, ...]) -> tuple[WriteOffAsset, ...]:
+        ids = tuple(unit.id for unit in units)
+        latest = (
+            select(
+                MovementLineRecord.asset_unit_id,
+                func.max(MovementDocumentRecord.effective_date).label("effective_date"),
+            )
+            .join(MovementDocumentRecord, MovementLineRecord.movement_id == MovementDocumentRecord.id)
+            .where(MovementLineRecord.asset_unit_id.in_(ids))
+            .group_by(MovementLineRecord.asset_unit_id)
+            .subquery()
+        )
+        statement = (
+            select(
+                AssetUnitRecord.id,
+                ReceiptLineRecord.accounting_classification,
+                ReceiptLineRecord.tracking_policy,
+                ReceiptDocumentRecord.effective_date,
+                latest.c.effective_date.label("transfer_date"),
+                WriteOffLineRecord.write_off_id,
+            )
+            .outerjoin(ReceiptLineRecord, AssetUnitRecord.receipt_line_id == ReceiptLineRecord.id)
+            .outerjoin(ReceiptDocumentRecord, ReceiptLineRecord.receipt_id == ReceiptDocumentRecord.id)
+            .outerjoin(latest, latest.c.asset_unit_id == AssetUnitRecord.id)
+            .outerjoin(WriteOffLineRecord, WriteOffLineRecord.asset_unit_id == AssetUnitRecord.id)
+            .where(AssetUnitRecord.id.in_(ids))
+        )
+        with self.session.no_autoflush:
+            rows = {row.id: row for row in self.session.execute(statement)}
+        return tuple(
+            WriteOffAsset(
+                unit,
+                AccountingClassification(rows[unit.id].accounting_classification)
+                if rows[unit.id].accounting_classification
+                else None,
+                TrackingPolicy(rows[unit.id].tracking_policy) if rows[unit.id].tracking_policy else None,
+                rows[unit.id].effective_date,
+                rows[unit.id].transfer_date,
+                rows[unit.id].write_off_id,
+            )
+            for unit in units
+        )
 
     def save(self, unit: AssetUnit) -> None:
         with self.session.no_autoflush:
@@ -191,6 +246,27 @@ class SqlAlchemyMovementRepository:
             return movement_from_record(record) if record is not None else None
 
 
+class SqlAlchemyWriteOffRepository:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def add(self, document: WriteOffDocument) -> None:
+        self.session.add(write_off_to_record(document))
+
+    def get(self, document_id: UUID) -> WriteOffDocument | None:
+        for record in self.session.new:
+            if isinstance(record, WriteOffDocumentRecord) and record.id == document_id:
+                return write_off_from_record(record)
+        statement = (
+            select(WriteOffDocumentRecord)
+            .where(WriteOffDocumentRecord.id == document_id)
+            .options(selectinload(WriteOffDocumentRecord.lines))
+        )
+        with self.session.no_autoflush:
+            record = self.session.scalar(statement)
+            return write_off_from_record(record) if record is not None else None
+
+
 class SqlAlchemyUnitOfWork:
     """One fresh session per command; repositories never flush or commit.
 
@@ -211,6 +287,7 @@ class SqlAlchemyUnitOfWork:
         self.receipts = SqlAlchemyReceiptRepository(self.session)
         self.asset_units = SqlAlchemyAssetUnitRepository(self.session)
         self.movements = SqlAlchemyMovementRepository(self.session)
+        self.write_offs = SqlAlchemyWriteOffRepository(self.session)
         self._active = True
         self._committed = False
         return self
@@ -236,6 +313,10 @@ class SqlAlchemyUnitOfWork:
         except IntegrityError as error:
             self.session.rollback()
             constraint = getattr(getattr(error.orig, "diag", None), "constraint_name", None)
+            if constraint == "pk_write_off_documents":
+                raise DuplicateWriteOff("write-off identity already processed") from None
+            if constraint == "uq_write_off_lines_asset_unit_id":
+                raise AlreadyWrittenOff("unit already written off") from None
             if constraint == "pk_movement_documents":
                 raise DuplicateMovement("movement identity already processed") from None
             if constraint == "uq_nomenclatures_code":

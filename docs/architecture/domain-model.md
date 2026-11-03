@@ -327,8 +327,8 @@ Initial rules confirmed by the user on 2026-11-01:
   location and responsible-party references. New receipt units are `ACTIVE`.
   Unknown custody is represented explicitly by `None`, not a fictional warehouse.
 - Only units with explicitly `ACTIVE` lifecycle state and a matching known source
-  assignment can transfer. `ACTIVE` is the only defined lifecycle value; unknown
-  lifecycle is ineligible. Other states and transitions still require confirmation.
+  assignment can transfer. Unknown lifecycle is ineligible. M5A adds the terminal
+  `WRITTEN_OFF` state and transition described in section 21.
 - Movement identity is a caller-supplied UUID reused on retries. Duplicate UUIDs
   are rejected; document numbers alone do not identify duplicates or imply legality.
 - A transfer's effective date must be on or after the selected units' receipt and
@@ -379,8 +379,8 @@ Scope exclusions and remaining questions:
 - No posting, depreciation, write-off, quantity-stock movement or Flask interface.
 - No legal document validation, custody acceptance/authorization, HR hierarchy or
   location catalog. References are opaque; their authoritative source is unresolved.
-- Lifecycle states beyond `ACTIVE`, legacy onboarding and serial-resolution UX
-  remain future work. Section 20 defines the implemented Python reporting queries.
+- Legacy onboarding and serial-resolution UX remain future work. Section 20
+  defines the reporting queries; section 21 extends their lifecycle support.
 
 ## 20. Milestone 4 — historical inventory and acquisition valuation
 
@@ -424,10 +424,10 @@ missing unit (`AssetNotFound`) and registered units with unknown custody.
 
 All persisted receipts/movements represent completed commands. There are no
 draft/cancel flags, reversals, corrections or mutation workflows in M4. `ACTIVE`
-is the only supported lifecycle and transfers never change it. Unknown legacy
-lifecycle makes a balance incomplete; current lifecycle is not treated as a
-substitute for a future lifecycle-history implementation. Any additional lifecycle
-transitions will require dated history before historical reporting supports them.
+was the only supported lifecycle in M4, and transfers never change it. Unknown
+legacy lifecycle makes a balance incomplete. Section 21 adds dated write-off
+history and historical lifecycle reconstruction; current lifecycle alone never
+substitutes for that history.
 
 ### Queries, scope and completeness
 
@@ -490,3 +490,132 @@ The synthetic scale test checks query count and EXPLAIN ANALYZE/BUFFERS on 5,000
 assets with 2,750 movement lines. Existing FK/serial indexes and the new unique
 order constraint suffice for that measured plan; no speculative reporting index
 or materialized projection is added. This is not a production capacity guarantee.
+
+
+## 21. Milestone 5A — documented serialized-inventory write-off
+
+Business semantics confirmed by the user on 2026-11-03 and implemented in M5A.
+
+### Accounting acceptance and date semantics
+
+A serialized FPV drone remains in accounting inventory after transfer to a subdivision
+and after physical use or loss. The subdivision supplies the required supporting
+package, including the properly authorized write-off document. The financial-economic
+service examines the package and accepts it for accounting when complete and valid.
+
+**The write-off accounting effective date is the date when the financial-economic
+service accepts the verified document package for accounting.** Initial receipt of
+unverified documents does not establish that date.
+
+- `document_date`: date of the write-off act.
+- `authorization_date`: date of the commander's authorization.
+- `effective_date`: explicit date of financial-economic acceptance for accounting.
+- `created_at`: timezone-aware system registration timestamp supplied by the service clock.
+
+The service requires `effective_date` explicitly and never derives it from the act,
+authorization, transfer, launch/loss, first receipt of documents, or registration time.
+It must be on or after authorization, the asset's receipt effective date, and its latest
+transfer effective date. Each selected unit is checked independently. Same-day receipt,
+transfers and subsequent write-off are permitted. No further act-date relationship,
+closed-period rule, future-date restriction or bitemporal registration cutoff is added.
+Late registration can therefore change an earlier effective-date report.
+
+### Persisted classification and eligibility
+
+`ReceiptLine.accounting_classification` is an immutable receipt-time snapshot:
+`AccountingClassification.INVENTORY`, `FIXED_ASSET`, or `None` (unknown). It is
+separate from tracking policy, recognition, lifecycle, catalog defaults and ledger
+analytics. Receipt registration accepts it explicitly, without changing existing
+callers that omit it. A homogeneous receipt line has one classification for its units.
+
+M5A requires the persisted classification to be `INVENTORY`, receipt tracking to be
+`SERIALIZED`, and unit lifecycle to be explicitly `ACTIVE`. Fixed assets and unknown
+classification/lifecycle are rejected. No configured identifier allowlist, name/code
+heuristic, or inference from `default_accounting_classification` is used. The migration
+leaves legacy classifications NULL, including records with suggestive catalog defaults.
+No history-repair or legacy classification backfill operation is supplied.
+
+### Documents, immutable history and transaction boundary
+
+`WriteOffDocument` is an immutable aggregate with caller-supplied UUID, act number/date,
+nonblank authorization reference/date, accounting effective date, aware registration
+timestamp, and a nonempty ordered tuple of `WriteOffLine` asset UUID references.
+Line identity is `(write_off_id, asset_unit_id)`. The document accepts units across
+receipt lines and custodians; write-off does not require or invent a custody transfer.
+
+The document UUID is reused on retries. An existing UUID raises `DuplicateWriteOff`;
+there is no silent success/idempotent replay. Document numbers are nonunique, as in M3.
+Different UUIDs are distinct registrations; the same unit cannot belong to two write-offs.
+The policy does not detect duplicate paper documents assigned different UUIDs selecting
+disjoint assets. A paper-document deduplication namespace needs separate business rules.
+
+`WriteOffAssets` validates distinct UUIDs, existence, immutable receipt classification,
+receipt/latest movement chronology and any previous write-off. It rejects inconsistent
+current effective-date metadata. All validation precedes changed snapshots or staging.
+It returns replacement units with `WRITTEN_OFF` lifecycle and the accounting effective
+date as `last_effective_date`. Serial identity, initial/current custody, original receipt
+and price, analytics and every movement remain unchanged and searchable. Custody after
+write-off is the last recorded assignment, not proof of physical possession.
+
+One UoW locks selected asset rows in UUID order using the same repository operation as
+transfers, refreshes after waiting, rechecks document identity, reads origin/history facts,
+stages the document and all changed units, and commits once. PostgreSQL document PKs and
+unique write-off membership per unit defend identity races. Failures roll back the entire
+transaction. Lock timeouts, deadlocks and serialization failures retain the existing
+`RepositoryConflict` whole-command retry contract. A waiting transfer observes written-off
+lifecycle and fails; a waiting write-off observes a newly committed transfer and revalidates
+its effective date. Fakes preserve the atomic snapshot/stale-commit behavior.
+
+There are no document update/delete operations, unit deletion, implicit launch/loss events,
+or changes to the receipt's original quantity. This is application/API immutability with
+FK/uniqueness constraints, not protection against unrestricted administrative database writes.
+
+### Historical membership, custody and acquisition value
+
+Core read queries reconstruct accounting lifecycle from receipt and dated write-off facts.
+A consistent written-off unit is `ACTIVE` before accounting acceptance and `WRITTEN_OFF`
+on and after that date, inclusive. Current lifecycle is cross-checked against history;
+it never acts as the sole historical membership criterion. Before receipt, positions
+retain `registered=False`. Historical custody still comes from initial assignments and
+movement destinations, independently of lifecycle.
+
+Inventory filters default to `LifecycleState.ACTIVE`. `WRITTEN_OFF` requests the written-off
+population; `None` includes both with separate lifecycle groups. Unknown/contradictory
+lifecycle history remains diagnostic in either selection. Missing write-off evidence,
+contradictory current state/classification, write-off preceding receipt/authorization,
+or movements dated after write-off produce `invalid_write_off_history`. M4 missing-origin,
+unknown-custody, broken-chain and ambiguous same-day transfer diagnostics remain supported;
+incomplete reports suppress verified groups/counts/totals. Known legacy custody/order is
+never fabricated. Unknown classification alone does not invalidate an existing M4 report;
+it prevents the new write-off operation.
+
+Positions expose historical lifecycle and write-off evidence effective by the requested
+date. Exact serial lookup and history retain written-off units, receipt prices and the
+write-off reference. History includes `WRITE_OFF` events with authorization reference/date;
+on a valid shared day receipt precedes transfers and write-off follows transfers. Missing
+legacy transfer order continues to make the day explicitly unordered.
+
+The 27-received / 12-transferred / 8-written-off scenario includes all 27 before acceptance.
+From acceptance, 19 remain active (15 original, 4 receiving custody) and 8 are written off.
+At the synthetic UAH 14,500 acquisition price, active value is UAH 275,500 and written-off
+historical acquisition value is UAH 116,000. Values remain exact Decimal/NUMERIC, grouped
+by original receipt and currency; no depreciation, FX, rounding policy or journal entries
+are introduced. These are **accounting availability reports, not proof of physical availability**.
+Read-only REPEATABLE READ snapshots, set-based aggregation and fixed reporting query count
+remain in place.
+
+### Migration, evidence and scope limits
+
+Forward-only `0006` follows `0005`. It adds nullable receipt classification, write-off
+document/line tables and constraints, and expands the lifecycle check to `ACTIVE` or
+`WRITTEN_OFF` (with legacy NULL preserved). No earlier migration or historical business
+field is rewritten, and no legacy classification or write-off is inferred. Downgrade
+refuses audit-data removal. Verification migrates only disposable test databases.
+
+The caller supplies an already authorized and accepted package. The application records
+its references/dates but does not verify signatures, authority or legal sufficiency.
+Supporting-document requirements still need approved business rules; no universal launch
+act is required. Full approval workflows, document attachments, role enforcement,
+operational launch tracking, fixed-asset disposal/depreciation, salvage receipts,
+automatic postings, reversals/corrections, legacy onboarding, closed periods and Flask UI
+remain outside M5A.
