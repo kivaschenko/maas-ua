@@ -62,6 +62,11 @@ class Quantity:
         _require_text(self.unit, "unit of measure")
 
 
+class AccountingClassification(StrEnum):
+    INVENTORY = "INVENTORY"
+    FIXED_ASSET = "FIXED_ASSET"
+
+
 class TrackingPolicy(StrEnum):
     SERIALIZED = "SERIALIZED"
     QUANTITY = "QUANTITY"
@@ -104,9 +109,14 @@ class ReceiptLine:
     quantity: Quantity
     unit_price: Money
     analytics: tuple[tuple[str, str], ...] = ()
+    accounting_classification: AccountingClassification | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         _require_id(self.id)
+        if self.accounting_classification is not None and not isinstance(
+            self.accounting_classification, AccountingClassification
+        ):
+            raise InvalidReceipt("receipt classification must be explicit or unknown")
         if not isinstance(self.nomenclature, Nomenclature) or (
             self.nomenclature.tracking_policy is not TrackingPolicy.SERIALIZED
         ):
@@ -207,11 +217,14 @@ def register_serialized_receipt(
     serial_numbers: Iterable[SerialNumber],
     analytics: tuple[tuple[str, str], ...] = (),
     initial_custody: CustodyAssignment | None = None,
+    accounting_classification: AccountingClassification | None = None,
     new_id: Callable[[], UUID] = uuid4,
 ) -> RegisteredReceipt:
     """Build a complete receipt and its units, with no persistence side effects."""
     receipt_id = new_id()
-    line = ReceiptLine(new_id(), nomenclature, quantity, unit_price, analytics)
+    line = ReceiptLine(
+        new_id(), nomenclature, quantity, unit_price, analytics, accounting_classification=accounting_classification
+    )
     receipt = ReceiptDocument(
         receipt_id,
         document_number,

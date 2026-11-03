@@ -20,6 +20,7 @@ from maas_ua.domain.receipts import (
     ReceiptDocument,
     SerialNumber,
 )
+from maas_ua.domain.write_offs import AlreadyWrittenOff, DuplicateWriteOff, WriteOffAsset, WriteOffDocument
 from maas_ua.ports import DuplicateNomenclatureCode, RepositoryConflict
 
 
@@ -29,6 +30,7 @@ class _State:
     receipts: Mapping[UUID, ReceiptDocument] = field(default_factory=dict)
     asset_units: Mapping[UUID, AssetUnit] = field(default_factory=dict)
     movements: Mapping[UUID, MovementDocument] = field(default_factory=dict)
+    write_offs: Mapping[UUID, WriteOffDocument] = field(default_factory=dict)
 
 
 class FakeStore:
@@ -47,6 +49,10 @@ class FakeStore:
     @property
     def movements(self) -> Mapping[UUID, MovementDocument]:
         return MappingProxyType(self._state.movements)
+
+    @property
+    def write_offs(self) -> Mapping[UUID, WriteOffDocument]:
+        return MappingProxyType(self._state.write_offs)
 
     @property
     def receipts(self) -> Mapping[UUID, ReceiptDocument]:
@@ -89,8 +95,11 @@ class FakeReceiptRepository:
 
 
 class FakeAssetUnitRepository:
-    def __init__(self, units: Mapping[UUID, AssetUnit]) -> None:
+    def __init__(self, units: Mapping[UUID, AssetUnit], *, receipts=None, movements=None, write_offs=None) -> None:
         self._items = dict(units)
+        self._receipts = receipts if receipts is not None else {}
+        self._movements = movements if movements is not None else {}
+        self._write_offs = write_offs if write_offs is not None else {}
 
     def add(self, unit: AssetUnit) -> None:
         if unit.id in self._items:
@@ -115,6 +124,37 @@ class FakeAssetUnitRepository:
             raise RepositoryConflict("unit must exist and origin must remain unchanged")
         self._items[unit.id] = unit
 
+    def write_off_facts(self, units: tuple[AssetUnit, ...]) -> tuple[WriteOffAsset, ...]:
+        origins = {line.id: (receipt, line) for receipt in self._receipts.values() for line in receipt.lines}
+        result = []
+        for unit in units:
+            origin = origins.get(unit.receipt_line_id)
+            receipt, line = origin if origin else (None, None)
+            dates = [
+                doc.effective_date
+                for doc in self._movements.values()
+                if any(item.asset_unit_id == unit.id for item in doc.lines)
+            ]
+            previous = next(
+                (
+                    doc.id
+                    for doc in self._write_offs.values()
+                    if any(item.asset_unit_id == unit.id for item in doc.lines)
+                ),
+                None,
+            )
+            result.append(
+                WriteOffAsset(
+                    unit,
+                    line.accounting_classification if line else None,
+                    line.nomenclature.tracking_policy if line else None,
+                    receipt.effective_date if receipt else None,
+                    max(dates) if dates else None,
+                    previous,
+                )
+            )
+        return tuple(result)
+
     def contains_serial(self, serial: SerialNumber) -> bool:
         return any(unit.serial_number == serial for unit in self._items.values())
 
@@ -132,6 +172,22 @@ class FakeMovementRepository:
         return self._items.get(movement_id)
 
 
+class FakeWriteOffRepository:
+    def __init__(self, items: Mapping[UUID, WriteOffDocument]) -> None:
+        self._items = dict(items)
+
+    def add(self, document: WriteOffDocument) -> None:
+        if document.id in self._items:
+            raise DuplicateWriteOff("write-off identity already processed")
+        existing = {line.asset_unit_id for doc in self._items.values() for line in doc.lines}
+        if any(line.asset_unit_id in existing for line in document.lines):
+            raise AlreadyWrittenOff("unit already written off")
+        self._items[document.id] = document
+
+    def get(self, document_id: UUID) -> WriteOffDocument | None:
+        return self._items.get(document_id)
+
+
 class FakeUnitOfWork:
     def __init__(self, store: FakeStore | None = None) -> None:
         self.store = store if store is not None else FakeStore()
@@ -145,8 +201,14 @@ class FakeUnitOfWork:
         self._snapshot = self.store._state
         self.nomenclatures = FakeNomenclatureRepository(self._snapshot.nomenclatures)
         self.receipts = FakeReceiptRepository(self._snapshot.receipts)
-        self.asset_units = FakeAssetUnitRepository(self._snapshot.asset_units)
         self.movements = FakeMovementRepository(self._snapshot.movements)
+        self.write_offs = FakeWriteOffRepository(self._snapshot.write_offs)
+        self.asset_units = FakeAssetUnitRepository(
+            self._snapshot.asset_units,
+            receipts=self.receipts._items,
+            movements=self.movements._items,
+            write_offs=self.write_offs._items,
+        )
         self._active = True
         self._committed = False
         return self
@@ -173,6 +235,7 @@ class FakeUnitOfWork:
             MappingProxyType(dict(self.receipts._items)),
             MappingProxyType(dict(self.asset_units._items)),
             MappingProxyType(dict(self.movements._items)),
+            MappingProxyType(dict(self.write_offs._items)),
         )
         self.store._state = state
         self._committed = True
@@ -183,6 +246,12 @@ class FakeUnitOfWork:
             raise RuntimeError("rollback requires an active unit of work")
         self.nomenclatures = FakeNomenclatureRepository(self.store.nomenclatures)
         self.receipts = FakeReceiptRepository(self.store.receipts)
-        self.asset_units = FakeAssetUnitRepository(self.store.asset_units)
         self.movements = FakeMovementRepository(self.store.movements)
+        self.write_offs = FakeWriteOffRepository(self.store.write_offs)
+        self.asset_units = FakeAssetUnitRepository(
+            self.store.asset_units,
+            receipts=self.receipts._items,
+            movements=self.movements._items,
+            write_offs=self.write_offs._items,
+        )
         self.rollback_count += 1

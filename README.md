@@ -4,7 +4,7 @@
 
 MAAS-UA is a Python application for traceable accounting of military property, initially focused on individually identified FPV drones and reusable unmanned aircraft systems (БпАК), with the longer-term goal of reconciling property registers and financial accounting.
 
-> **Status (2026-11-02):** M1–M3 and M4 are implemented in the repository. M4 adds immutable initial custody, persisted transfer order, serial lookup, history, historical positions, and acquisition-value inventory reports. These are Python use cases; no Flask reporting endpoints or operational UI are implemented.
+> **Status (2026-11-03):** M1–M4 and M5A are implemented. M5A adds receipt-time accounting classification and documented write-off of serialized inventory, with financial-economic acceptance dates, atomic persistence, and historical lifecycle reporting. These are Python use cases; no Flask reporting endpoints or operational UI are implemented.
 >
 > **Data handling:** Use synthetic records in code, fixtures, prompts, CI, documentation, logs, and public discussions. Do not publish real military inventory, serial numbers, unit identities, custody/location data, accounting documents, or operational details. Follow applicable authorization and data-handling requirements.
 
@@ -24,7 +24,8 @@ The system distinguishes property/custody accounting from financial accounting. 
 | Persistent `Nomenclature` and receipt references | Implemented (M2.1) |
 | Document-backed transfer/movement of serial-tracked units | Implemented (M3) |
 | Exact serial lookup, provenance/history, historical custody, quantity and acquisition valuation | Implemented (M4); incomplete history is explicit |
-| Write-off and reversal/corrections | Planned; business rules to confirm (M5+) |
+| Documented write-off of serialized inventory | Implemented (M5A); excludes fixed assets |
+| Reversal/corrections and legacy classification onboarding | Planned; business rules to confirm |
 | Fixed-asset amortization, accounting entries, reconciliation | Planned (M6+) |
 | Flask UI, Excel import/export integration and user-facing reports | Planned integration (M7+); verify any pre-existing scripts separately |
 
@@ -96,7 +97,8 @@ A homogeneous receipt line of 27 FPV drones has 27 `AssetUnit` records, each poi
 - **M2.1 — Implemented:** nomenclature entity and persistence, receipt-line linkage.
 - **M3 — Implemented:** transfer command, movement document/history, custody changes, tests.
 - **M4 — Implemented:** immutable initial custody, transfer order, traceability queries, historical quantity/acquisition valuation and PostgreSQL tests.
-- **M5 — Proposed:** document-supported write-off of individual units, preserved history, correction policy.
+- **M5A — Implemented:** documented serialized-inventory write-off and historical accounting membership.
+- **M5+ — Proposed:** correction/reversal and legacy onboarding policies.
 - **M6 — Proposed:** fixed-asset accounting, depreciation, ledger analytics, reconciliation.
 - **M7 — Proposed:** Flask web workflows, Excel import/export, reports and regression tests.
 
@@ -110,7 +112,7 @@ Immutable query inputs and result DTOs live in `service_layer/inventory.py`; `ad
 - `GetAssetHistory`: receipt and chronologically ordered confirmed movement records, with document references.
 - `GetAssetPositionAsOf`: resolve the unit's custody/location **as of a business date**, based on receipt and valid movement history.
 - `GetInventoryBalance`: group units by nomenclature, source/receipt, custody/location and agreed accounting dimensions for a date.
-- `GetInventoryValuation`: calculate acquisition-value totals using receipt-line prices with `Decimal`, with no depreciation or unimplemented write-offs assumed.
+- `GetInventoryValuation`: calculate acquisition-value totals using receipt-line prices with `Decimal`, excluding units from their write-off accounting effective date; no depreciation.
 
 `as_of` means **end of the business date**, including receipts/transfers with `effective_date <= as_of`. Document date and `created_at` are displayed evidence, not reporting cutoffs. Late registration can change earlier reports; reporting does not reproduce what the system knew at an earlier time. Before receipt, position returns `registered=False`; a missing asset raises `AssetNotFound`.
 
@@ -145,7 +147,7 @@ finally:
     engine.dispose()
 ```
 
-Migration `0005` follows `0004` and is **forward-only**: downgrade refuses to erase audit facts. It adds initial custody and order without filling legacy records from current state, timestamps, UUIDs or the first movement. Old custody/order remain unknown; no onboarding/repair workflow is supplied. Apply it to a reviewed deployment target through the existing Alembic procedure; tests migrate only disposable databases. No draft/cancel/reversal, lifecycle transition, depreciation, write-off or posting workflow is added. Read guarantees assume records are created through the supported commands, not arbitrary administrative SQL.
+Migration `0005` follows `0004` and is **forward-only**: downgrade refuses to erase audit facts. It adds initial custody and order without filling legacy records from current state, timestamps, UUIDs or the first movement. Old custody/order remain unknown; no onboarding/repair workflow is supplied. Apply it to a reviewed deployment target through the existing Alembic procedure; tests migrate only disposable databases. M4 itself added no lifecycle transition; M5A supplies the documented write-off extension below. Draft/cancel/reversal, depreciation and posting workflows remain outside scope. Read guarantees assume records are created through the supported commands, not arbitrary administrative SQL.
 
 ### Acceptance scenario (synthetic)
 
@@ -156,6 +158,61 @@ Migration `0005` follows `0004` and is **forward-only**: downgrade refuses to er
 5. Selecting one transferred serial reveals its receipt, acquisition source, unit cost, transfer document, and custody history.
 
 These are illustrative assumptions, not real military records; dates, custody rules, and registration status must be explicit in the tests.
+
+## M5A: Documented inventory write-off
+
+`WriteOffAssets` in `service_layer/write_offs.py` registers one immutable
+`WriteOffDocument` and its per-unit `WriteOffLine` references. It transitions only
+explicitly active, serialized **inventory** to `WRITTEN_OFF`. Receipt lines now
+have an explicit `AccountingClassification` snapshot (`INVENTORY`, `FIXED_ASSET`,
+or unknown). Pass it through `RegisterInventoryReceipt.accounting_classification`;
+it is never inferred from catalog defaults, names, codes or an allowlist. Unknown
+and fixed-asset classifications are ineligible for M5A write-off. Existing receipt
+callers remain compatible; omitting classification records unknown.
+
+The caller supplies a document UUID reused on retries, act number/date,
+`authorization_reference`, `authorization_date`, explicit `effective_date`, and
+selected internal asset UUIDs. Duplicate UUIDs are rejected, not silently accepted;
+document numbers are not unique. A unit can occur in only one completed write-off.
+
+**The accounting effective date is when the financial-economic service accepts
+the verified document package for accounting.** It must be on or after authorization,
+receipt and each unit's latest transfer. The act date and aware system `created_at`
+remain separate evidence. The date is never copied from physical use/loss, first
+unverified receipt of documents, authorization, transfer, or registration time.
+The caller supplies already verified evidence; no multi-step approval workflow or
+mandatory launch act is introduced.
+
+The command locks all selected units in UUID order, rechecks document identity
+after waiting, validates the entire selection, and commits the document and unit
+snapshots once. Any failure rolls back all changes. Transfers share these locks
+and reject written-off units. Same-day receipt/transfer followed by write-off is
+allowed. Custody is preserved as the last recorded assignment, not an assertion
+of physical presence; receipt origins, serials, original values and movements remain.
+
+Historical reports default to `InventoryFilter(lifecycle_state=LifecycleState.ACTIVE)`:
+units remain included before accounting acceptance and are excluded on that date,
+inclusive. Request `LifecycleState.WRITTEN_OFF` for written-off units, or `None` for
+both states; groups retain lifecycle separately. Position results expose historical
+lifecycle and effective write-off evidence. Serial lookup and history preserve the
+write-off document and its authorization fields. Missing/contradictory lifecycle
+history remains diagnostic rather than disappearing through a lifecycle filter.
+These reports describe **accounting availability, not physical availability**.
+
+The 27-received, 12-transferred, 8-written-off scenario leaves 19 active units:
+15 at the original assignment and 4 at the receiving assignment. At the synthetic
+UAH 14,500 unit price, active acquisition value becomes UAH 275,500; the eight
+retain UAH 116,000 of original acquisition value in historical queries. Currency
+totals remain separate, with no new rounding or postings.
+
+Forward-only migration `0006` follows `0005`, adds the nullable receipt classification
+snapshot and write-off document/line tables, and extends the lifecycle constraint.
+It preserves legacy rows without assigning classifications or synthesizing history.
+It has been applied only to disposable test databases during verification. Existing
+unknown classifications need a separately approved onboarding/correction process.
+Fixed-asset disposal, depreciation, journal entries, reversals, legal evidence
+verification, signature/role enforcement, closed periods and Flask UI remain outside
+this milestone. See [the confirmed domain rules](docs/architecture/domain-model.md#21-milestone-5a--documented-serialized-inventory-write-off).
 
 ## Testing strategy
 
@@ -184,7 +241,7 @@ uv run pytest -q --tb=short
 uv run ruff check .
 ```
 
-The migration tests check Alembic/ORM agreement, historical revision reversibility, `0005` downgrade refusal and preservation of populated legacy rows. The scale test checks fixed reporting query count and runs `EXPLAIN (ANALYZE, BUFFERS)` on 5,000 synthetic assets and 2,750 movement lines. A local position aggregation measured approximately 13 ms; this is diagnostic, not a production performance guarantee. No extra reporting indexes were justified by that plan. Formatting checks for M4 use changed Python files; unrelated historical formatting differences remain untouched.
+The migration tests check Alembic/ORM agreement, historical revision reversibility, `0005`/`0006` downgrade refusal and preservation of populated legacy rows. The scale test checks fixed reporting query count and runs `EXPLAIN (ANALYZE, BUFFERS)` on 5,000 synthetic assets and 2,750 movement lines. An earlier M4 position aggregation measured approximately 13 ms; this is diagnostic, not a production performance guarantee. No extra reporting indexes were justified by that plan. Formatting checks for M4 use changed Python files; unrelated historical formatting differences remain untouched.
 
 Do not run Alembic against production or shared databases without an approved deployment/migration procedure.
 

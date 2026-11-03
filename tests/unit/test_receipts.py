@@ -194,3 +194,16 @@ def test_line_itself_enforces_serialized_quantity_invariants():
 def test_identity_factory_cannot_reuse_an_identity():
     with pytest.raises(InvalidReceipt, match="identities must be distinct"):
         register_serialized_receipt(**receipt_input(), new_id=lambda: UUID(int=1))
+
+
+def test_receipt_classification_is_an_explicit_immutable_snapshot():
+    from maas_ua.domain.receipts import AccountingClassification
+
+    result = register_serialized_receipt(**receipt_input(accounting_classification=AccountingClassification.INVENTORY))
+    line = result.receipt.lines[0]
+    assert line.accounting_classification is AccountingClassification.INVENTORY
+    assert register_serialized_receipt(**receipt_input()).receipt.lines[0].accounting_classification is None
+    with pytest.raises(FrozenInstanceError):
+        line.accounting_classification = AccountingClassification.FIXED_ASSET
+    with pytest.raises(InvalidReceipt, match="classification"):
+        register_serialized_receipt(**receipt_input(accounting_classification="INVENTORY"))

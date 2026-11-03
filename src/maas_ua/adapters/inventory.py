@@ -14,6 +14,8 @@ from maas_ua.adapters.orm import (
     NomenclatureRecord,
     ReceiptDocumentRecord,
     ReceiptLineRecord,
+    WriteOffDocumentRecord,
+    WriteOffLineRecord,
 )
 from maas_ua.domain.custody import CustodyAssignment
 from maas_ua.domain.receipts import SerialNumber
@@ -37,6 +39,7 @@ from maas_ua.service_layer.inventory import (
     InventoryReport,
     NomenclatureInfo,
     ReceiptOrigin,
+    WriteOffInfo,
 )
 
 assets = AssetUnitRecord.__table__
@@ -45,6 +48,8 @@ receipts = ReceiptDocumentRecord.__table__
 nomenclatures = NomenclatureRecord.__table__
 movements = MovementDocumentRecord.__table__
 movement_lines = MovementLineRecord.__table__
+write_offs = WriteOffDocumentRecord.__table__
+write_off_lines = WriteOffLineRecord.__table__
 
 ISSUES = (
     "missing_provenance",
@@ -53,6 +58,7 @@ ISSUES = (
     "ambiguous_movement_order",
     "broken_custody_chain",
     "movement_before_receipt",
+    "invalid_write_off_history",
 )
 ORIGIN_COLUMNS = (
     "receipt_id",
@@ -66,6 +72,7 @@ ORIGIN_COLUMNS = (
     "currency",
     "unit_of_measure",
     "analytics",
+    "accounting_classification",
 )
 CATALOG_COLUMNS = ("nomenclature_id", "nomenclature_code", "nomenclature_name")
 
@@ -78,6 +85,14 @@ def _base(filters=InventoryFilter(), *, asset_id=None, serial=None):
         assets.c.initial_location_ref,
         assets.c.initial_party_ref,
         assets.c.lifecycle_state,
+        receipt_lines.c.accounting_classification,
+        write_offs.c.id.label("write_off_id"),
+        write_offs.c.document_number.label("write_off_document_number"),
+        write_offs.c.document_date.label("write_off_document_date"),
+        write_offs.c.authorization_reference,
+        write_offs.c.authorization_date,
+        write_offs.c.effective_date.label("write_off_effective_date"),
+        write_offs.c.created_at.label("write_off_created_at"),
         receipt_lines.c.id.label("line_id"),
         receipts.c.id.label("receipt_id"),
         receipt_lines.c.nomenclature_id,
@@ -96,6 +111,8 @@ def _base(filters=InventoryFilter(), *, asset_id=None, serial=None):
         assets.outerjoin(receipt_lines, assets.c.receipt_line_id == receipt_lines.c.id)
         .outerjoin(receipts, receipt_lines.c.receipt_id == receipts.c.id)
         .outerjoin(nomenclatures, receipt_lines.c.nomenclature_id == nomenclatures.c.id)
+        .outerjoin(write_off_lines, write_off_lines.c.asset_unit_id == assets.c.id)
+        .outerjoin(write_offs, write_offs.c.id == write_off_lines.c.write_off_id)
     )
     for column, value in (
         (receipt_lines.c.nomenclature_id, filters.nomenclature_id),
@@ -188,8 +205,37 @@ def historical_positions(as_of, filters=InventoryFilter(), *, asset_id=None):
     location = case((last.c.asset_id.is_not(None), last.c.destination_location_ref), else_=b.c.initial_location_ref)
     party = case((last.c.asset_id.is_not(None), last.c.destination_party_ref), else_=b.c.initial_party_ref)
     known = and_(not_(ambiguous), location.is_not(None), party.is_not(None))
+    has_write_off = b.c.write_off_id.is_not(None)
+    # Check the complete chronology, including later facts, independently of the
+    # historical custody cutoff. Current state alone never decides membership.
+    latest_transfer = (
+        select(movement_lines.c.asset_unit_id, func.max(movements.c.effective_date).label("effective_date"))
+        .select_from(movement_lines.join(movements, movements.c.id == movement_lines.c.movement_id))
+        .group_by(movement_lines.c.asset_unit_id)
+        .subquery("latest_transfer_date")
+    )
+    invalid_write_off = or_(
+        and_(b.c.lifecycle_state == "WRITTEN_OFF", not_(has_write_off)),
+        and_(
+            has_write_off,
+            or_(
+                b.c.lifecycle_state.is_distinct_from("WRITTEN_OFF"),
+                b.c.accounting_classification.is_distinct_from("INVENTORY"),
+                b.c.write_off_effective_date < b.c.effective_date,
+                b.c.write_off_effective_date < b.c.authorization_date,
+                latest_transfer.c.effective_date > b.c.write_off_effective_date,
+            ),
+        ),
+    )
+    unknown_lifecycle = or_(b.c.lifecycle_state.is_(None), b.c.lifecycle_state.not_in(("ACTIVE", "WRITTEN_OFF")))
+    lifecycle_as_of = case(
+        (or_(unknown_lifecycle, invalid_write_off), None),
+        (and_(has_write_off, b.c.write_off_effective_date <= as_of), "WRITTEN_OFF"),
+        else_="ACTIVE",
+    )
     positions = select(
         *b.c,
+        lifecycle_as_of.label("lifecycle_as_of"),
         case((known, location), else_=None).label("location_ref"),
         case((known, party), else_=None).label("responsible_party_ref"),
         known.label("position_known"),
@@ -205,12 +251,15 @@ def historical_positions(as_of, filters=InventoryFilter(), *, asset_id=None):
             func.btrim(b.c.currency) == "",
         ).label("missing_provenance"),
         or_(b.c.initial_location_ref.is_(None), b.c.initial_party_ref.is_(None)).label("missing_initial_custody"),
-        b.c.lifecycle_state.is_distinct_from("ACTIVE").label("unknown_lifecycle"),
+        unknown_lifecycle.label("unknown_lifecycle"),
+        func.coalesce(invalid_write_off, False).label("invalid_write_off_history"),
         ambiguous.label("ambiguous_movement_order"),
         and_(not_(ambiguous), func.coalesce(checks.c.broken, False)).label("broken_custody_chain"),
         func.coalesce(checks.c.before_receipt, False).label("movement_before_receipt"),
     ).select_from(
-        b.outerjoin(checks, checks.c.asset_id == b.c.asset_id).outerjoin(last, last.c.asset_id == b.c.asset_id)
+        b.outerjoin(checks, checks.c.asset_id == b.c.asset_id)
+        .outerjoin(last, last.c.asset_id == b.c.asset_id)
+        .outerjoin(latest_transfer, latest_transfer.c.asset_unit_id == b.c.asset_id)
     )
     p = positions.cte("historical_positions")
     scoped = select(p)
@@ -251,6 +300,20 @@ def _catalog(row):
     return NomenclatureInfo(*(row[name] for name in CATALOG_COLUMNS))
 
 
+def _write_off(row):
+    if row["write_off_id"] is None:
+        return None
+    return WriteOffInfo(
+        row["write_off_id"],
+        row["write_off_document_number"],
+        row["write_off_document_date"],
+        row["authorization_reference"],
+        row["authorization_date"],
+        row["write_off_effective_date"],
+        row["write_off_created_at"],
+    )
+
+
 def _details(row):
     return AssetDetails(
         row["asset_id"],
@@ -260,6 +323,7 @@ def _details(row):
         _custody(row["initial_location_ref"], row["initial_party_ref"]),
         row["lifecycle_state"],
         _issues(row),
+        _write_off(row),
     )
 
 
@@ -302,6 +366,10 @@ class SqlAlchemyInventoryReader:
                 True if row["effective_date"] is not None else None,
                 _custody(row["location_ref"], row["responsible_party_ref"]),
                 _issues(row),
+                row["lifecycle_as_of"],
+                _write_off(row)
+                if row["write_off_effective_date"] is not None and row["write_off_effective_date"] <= query.as_of
+                else None,
             )
 
     def asset_history(self, query: GetAssetHistory) -> AssetHistory:
@@ -345,6 +413,23 @@ class SqlAlchemyInventoryReader:
                         row["registration_order"],
                     )
                 )
+            if detail.write_off is not None:
+                doc = detail.write_off
+                days[doc.effective_date].append(
+                    AssetEvent(
+                        "WRITE_OFF",
+                        doc.document_id,
+                        doc.document_number,
+                        doc.document_date,
+                        doc.effective_date,
+                        doc.created_at,
+                        None,
+                        None,
+                        None,
+                        doc.authorization_reference,
+                        doc.authorization_date,
+                    )
+                )
             result = []
             for day, events in sorted(days.items()):
                 transfers = [event for event in events if event.kind == "TRANSFER"]
@@ -361,7 +446,21 @@ class SqlAlchemyInventoryReader:
         return self._inventory(query)
 
     def _inventory(self, query):
-        p = historical_positions(query.as_of, query.filters)
+        positions = historical_positions(query.as_of, query.filters)
+        if query.filters.lifecycle_state is not None:
+            p = (
+                select(positions)
+                .where(
+                    or_(
+                        positions.c.lifecycle_as_of == query.filters.lifecycle_state,
+                        positions.c.unknown_lifecycle,
+                        positions.c.invalid_write_off_history,
+                    )
+                )
+                .cte("lifecycle_scope")
+            )
+        else:
+            p = positions
         with self._snapshot() as connection:
             issue_columns = [p.c[name] for name in ISSUES]
             diagnostics = []
@@ -394,6 +493,7 @@ class SqlAlchemyInventoryReader:
             groups = []
             if not diagnostics:
                 columns = [p.c[name] for name in (*ORIGIN_COLUMNS, *CATALOG_COLUMNS)]
+                columns.append(p.c.lifecycle_as_of)
                 columns += [
                     p.c.location_ref
                     if "location" in query.group_by
@@ -416,6 +516,7 @@ class SqlAlchemyInventoryReader:
                             row["responsible_party_ref"],
                             row["count"],
                             row["value"],
+                            row["lifecycle_as_of"],
                         )
                     )
             return InventoryReport(

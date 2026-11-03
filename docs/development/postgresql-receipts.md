@@ -2,7 +2,8 @@
 
 Milestone 2 connects `RegisterInventoryReceipt` to PostgreSQL. Milestone 2.1 adds
 persistent nomenclature and Milestone 3 adds custody transfers through the same UoW.
-There is no Flask entrypoint, financial posting, depreciation, or Excel workflow here.
+M5A adds documented serialized-inventory write-off through the same UoW. There is no
+Flask entrypoint, financial posting, depreciation, or Excel workflow here.
 
 ## Mapping choice
 
@@ -24,10 +25,12 @@ asset units are separate aggregates accessed by their own repository.
 | --- | --- |
 | `nomenclatures` | Existing text ID, unique stable code, name, unit, explicit tracking, optional default classification |
 | `receipt_documents` | UUID PK, document number, document date, effective date, aware creation timestamp, source |
-| `receipt_lines` | UUID PK, receipt FK, tuple position, nomenclature ID and tracking policy snapshot, quantity and unit, unit price and currency, ordered analytics pairs |
+| `receipt_lines` | UUID PK, receipt FK, tuple position, nomenclature ID and tracking policy snapshot, quantity and unit, unit price and currency, ordered analytics pairs, immutable nullable accounting classification snapshot |
 | `asset_units` | UUID PK, origin line FK, serial namespace/value, immutable initial custody, current custody, lifecycle, latest effective date; unique exact namespace/value pair |
 | `movement_documents` | UUID PK, document/effective dates, creation timestamp, historical source/destination, new-record registration order |
 | `movement_lines` | Movement/unit FK pair, ordered position; each unit occurs once per document |
+| `write_off_documents` | UUID PK, act date, authorization reference/date, explicit financial-economic acceptance date, aware registration timestamp |
+| `write_off_lines` | Ordered document/unit references; each unit can belong to only one completed write-off |
 
 `position` preserves the existing ordered line tuple; it is storage metadata, with
 a unique `(receipt_id, position)` constraint. Receipt nomenclature IDs reference
@@ -155,3 +158,37 @@ commits preserving previous records, and UoW reuse. Migration tests exercise the
 original reversible revisions through `0004`, verify ORM/head agreement, confirm
 `0005` downgrade refusal, and verify that populated legacy business fields remain
 unchanged after the forward upgrade.
+
+
+## M5A write-off persistence
+
+`0006` follows `0005` and is forward-only. It adds receipt-line classification without
+backfilling legacy rows, creates write-off tables, and permits `WRITTEN_OFF` lifecycle.
+No development/shared database is migrated by tests. Existing historical migrations
+remain unchanged. The metadata/migration checks and downgrade refusal are tested.
+
+Pass `accounting_classification=AccountingClassification.INVENTORY` explicitly when
+registering eligible receipts. Omission means unknown, even if a catalog default exists;
+unknown and fixed-asset origins cannot be written off. Receipt snapshots have no edit API.
+
+Use `WriteOffAssets` / `write_off_assets` from `service_layer/write_offs.py` with the
+existing `SqlAlchemyUnitOfWork`. The command requires a UUID reused on retries, act
+number/date, authorization reference/date, internal asset IDs and explicit effective
+date. That effective date is financial-economic acceptance of the verified package,
+not first receipt of documents or a physical event. The domain requires it to be on
+or after authorization, receipt and the latest transfer for every selected unit.
+
+The service reuses transfer row locks in UUID order, rechecks identity after waiting,
+validates origin/history facts and commits the document and lifecycle updates once.
+Duplicate document UUIDs raise `DuplicateWriteOff`; existing write-off membership raises
+`AlreadyWrittenOff`. Database uniqueness remains authoritative for concurrent races;
+a failed insert rolls back all lifecycle changes. Repositories never flush or commit.
+Historical reporting derives membership from write-off effective dates while retaining
+original custody, serials, receipts, prices and movements. Read transactions and
+separate currency totals retain the M4 guarantees.
+
+Tests cover persistence/reload, all four distinct dates, flushed rollback, UUID races
+on disjoint assets, same-unit uniqueness across documents, FK/check constraints,
+competing write-offs, both transfer/write-off lock orders, chronology after waits,
+and the 27/12/8 historical reporting scenario. Unknown legacy classification requires
+an approved future onboarding process; do not fill it from catalog defaults.

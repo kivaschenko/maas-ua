@@ -23,13 +23,15 @@ def test_upgrade_downgrade_and_metadata_agree(database_url, migration_config):
                 "nomenclatures",
                 "movement_documents",
                 "movement_lines",
+                "write_off_documents",
+                "write_off_lines",
             }
             assert connection.scalar(text("SELECT version_num FROM alembic_version"))
         command.check(migration_config)
         with pytest.raises(RuntimeError, match="forward-only"):
-            command.downgrade(migration_config, "0004")
+            command.downgrade(migration_config, "0005")
         with engine.connect() as connection:
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0005"
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0006"
     finally:
         engine.dispose()
 
@@ -109,7 +111,15 @@ def test_inventory_migration_preserves_legacy_rows_without_guessing_facts(databa
                 assert {key: after[key] for key in previous} == previous
                 if name == "asset_units":
                     assert after["initial_location_ref"] is None and after["initial_party_ref"] is None
+                if name == "receipt_lines":
+                    assert after["accounting_classification"] is None
                 if name == "movement_documents":
                     assert after["registration_order"] is None
     finally:
         engine.dispose()
+
+
+def test_historical_inventory_migration_remains_forward_only(database_url, migration_config):
+    command.upgrade(migration_config, "0005")
+    with pytest.raises(RuntimeError, match="0005 is forward-only"):
+        command.downgrade(migration_config, "0004")
