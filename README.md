@@ -4,7 +4,7 @@
 
 MAAS-UA is a Python application for traceable accounting of military property, initially focused on individually identified FPV drones and reusable unmanned aircraft systems (БпАК), with the longer-term goal of reconciling property registers and financial accounting.
 
-> **Status (2026-11-07):** M1–M5A, M6.1 accounting references, and M6.2 manually authorized balanced financial journals are implemented. Property operations and financial posting remain separate Python use cases; no Flask reporting endpoints or operational UI are implemented.
+> **Status (2026-11-07):** M1–M5A, M6.1 accounting references, M6.2 manually authorized balanced financial journals, and M6.3 primary memorial-order registers are implemented. Property operations, financial posting, and register assignment remain explicit separate Python use cases; no Flask reporting endpoints or operational UI are implemented.
 >
 > **Data handling:** Use synthetic records in code, fixtures, prompts, CI, documentation, logs, and public discussions. Do not publish real military inventory, serial numbers, unit identities, custody/location data, accounting documents, or operational details. Follow applicable authorization and data-handling requirements.
 
@@ -28,6 +28,7 @@ The system distinguishes property/custody accounting from financial accounting. 
 | Reversal/corrections and legacy classification onboarding | Planned; business rules to confirm |
 | Approved chart versions, official/local accounts, typed dimensions, audited supersession | Implemented (M6.1) |
 | Manually authorized immutable balanced financial journals | Implemented (M6.2) |
+| Primary memorial registers, membership, finalization and canonical turnover queries | Implemented (M6.3) |
 | Fixed-asset amortization, automated postings, reconciliation | Planned |
 | Flask UI, Excel import/export integration and user-facing reports | Planned integration (M7+); verify any pre-existing scripts separately |
 
@@ -103,7 +104,8 @@ A homogeneous receipt line of 27 FPV drones has 27 `AssetUnit` records, each poi
 - **M5+ — Proposed:** correction/reversal and legacy onboarding policies.
 - **M6.1 — Implemented:** immutable accounting reference snapshots, typed dimensions and controlled supersession.
 - **M6.2 — Implemented:** explicit ledgers, permitted periods, document attribution, and manually authorized immutable balanced journals.
-- **M6.3+ — Proposed:** memorial orders, financial reports, automated postings and approved closing/correction rules.
+- **M6.3 — Implemented:** explicitly identified memorial registers, unique whole-entry primary membership, finalization, and turnover/assignment queries.
+- **M6.4+ — Proposed:** form rendering, broader financial reports, automated postings and approved closing/correction rules.
 - **M7 — Proposed:** Flask web workflows, Excel import/export, reports and regression tests.
 
 The roadmap is a planning tool, not an assertion of final approved accounting functionality.
@@ -352,6 +354,70 @@ No extra backdating/future-date restriction is imposed beyond the selected perio
 chart applicability. Closing/reopening, corrections/reversals, memorial orders, opening
 balances, off-balance operations, depreciation, reports and Flask UI remain excluded.
 Migration tests use disposable databases only; no shared database is migrated automatically.
+
+## M6.3: Primary memorial-order registers
+
+`domain/memorial_orders.py` defines immutable `MemorialOrderType`, `NumberingScope`,
+`MemorialOrderNumber`, `MemorialOrder`, `MemorialOrderMembership`, and
+`MemorialOrderStatus` (`OPEN`, `FINALIZED`). Each order owns its membership, while
+the referenced M6.2 journal entries and posting lines remain the canonical amounts.
+
+Explicit Python commands in `service_layer/memorial_orders.py` each use one UoW:
+
+1. `register_memorial_order_type` registers an exact form identifier, variant,
+   revision, authority reference and supplied administrative evidence. No official
+   types or regulatory revisions are seeded or inferred from a workbook header.
+2. `register_numbering_scope` registers a ledger namespace and its required reviewed
+   numbering-policy reference. Exact `(ledger_id, namespace)` is unique and immutable.
+   The responsible accounting owner must establish which types, periods, funds or
+   series share a namespace; callers must reuse its UUID. Supplied evidence does
+   not independently authenticate the policy, its authority, or scope equivalence.
+3. `create_memorial_order(CreateMemorialOrder(...), uow)` creates an OPEN register
+   with caller UUID, selected type/ledger/period, `[coverage_start, coverage_end)`,
+   and externally issued `MemorialOrderNumber(scope_id, value)`. Coverage may be
+   a subset of the accounting period. `(scope_id, issued_number)` and UUID are unique.
+   Multiple orders of the same type/period are permitted. No numbers or monthly
+   calendars are generated, and numbering never uses `MAX + 1`.
+4. `assign_journal_entries(AssignJournalEntries(...), uow)` validates the entire
+   selected batch of existing posted entries before staging membership. Entries
+   must share the order ledger/period and fall within its coverage. Each entry has
+   at most one primary membership across OPEN and FINALIZED orders. Assignment
+   records actor, authorization reference and an aware service timestamp.
+5. `finalize_memorial_order(FinalizeMemorialOrder(...), uow)` requires a nonempty
+   order and complete finalization evidence. It freezes membership and identity.
+   It does not close the accounting period; later postings can remain unassigned.
+
+Migration `0009` follows `0008` and adds four tables: type revisions, registered
+numbering scopes, orders, and membership. Composite FKs preserve ledger/period/scope
+relationships and real journal references. Database triggers additionally enforce
+period/coverage matching, OPEN-only assignment, nonempty finalization, immutable
+identity and append-only membership, including direct SQL and TRUNCATE CASCADE.
+Assignment and finalization share the parent-order row lock and refreshed statement
+snapshots under READ COMMITTED. Unique constraints resolve competing primary
+assignments and register identities. Locks last through the command's single commit;
+concurrency failures retain whole-command retry semantics. Existing journal triggers,
+chart/period locks, historical account references and property behavior are preserved.
+`0009` is forward-only and adds no inferred assignments to existing entries.
+
+`service_layer/memorial_reporting.py` defines `GetMemorialOrderTotals` and
+`GetJournalRegisterEntries`, with `JournalRegisterState.UNASSIGNED`, `OPEN`, or
+`FINALIZED`. `SqlAlchemyMemorialOrderReader` performs set-based reads in its own
+REPEATABLE READ, READ ONLY snapshot. Turnover remains separate by debit/credit,
+currency, and original account-definition/version UUID; documentary references do
+not multiply amounts. Empty registers return no currency/account groups. Assignment
+queries require a ledger and optionally a period, with deterministic entry ordering.
+These results reflect the query snapshot, not a new historical knowledge-time model.
+
+Displayed correspondence rows are distinct from whole-entry membership. M6.2 does
+not preserve arbitrary multiline debit-to-credit pairing. Totals carry the explicit
+`correspondence_rendering_unsupported` diagnostic; requesting correspondence rows
+raises `UnsupportedCorrespondenceRendering`. The supplied operational workbook is
+reference evidence only, with an older regulatory header and no embedded calculation
+formulas. No workbook, real records, or identifying contents are included in fixtures.
+Future rendering needs an approved form revision, grouping/pairing and turnover rules,
+and signature requirements. No Excel/PDF export, automatic allocation/posting,
+partial/secondary membership, removal/reassignment, reopening, period closing,
+corrections, trial balance, Journal-General, depreciation or Flask UI is added.
 
 ## Testing strategy
 

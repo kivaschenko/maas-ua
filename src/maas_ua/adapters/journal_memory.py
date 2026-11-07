@@ -27,6 +27,9 @@ class FakeAccountingLedgerRepository:
     def get_period_for_update(self, period_id):
         return self._periods.get(period_id)
 
+    def get_period(self, period_id):
+        return self._periods.get(period_id)
+
     def add_source(self, source):
         if source.id in self._sources or any(
             (source.receipt_id is not None and source.receipt_id == old.receipt_id)

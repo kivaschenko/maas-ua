@@ -956,3 +956,147 @@ document foundation with a separate invariant set; balance-only entries are neve
 weakened and artificial counterpart accounts are not introduced. Automatic posting,
 memorial orders, financial reports, opening balances, closing/reopening, corrections,
 reversals/red-storno, off-balance operations, depreciation and Flask UI remain excluded.
+
+
+## 24. Milestone 6.3 — primary memorial-order registers
+
+The user approved Phase 0 with adjustments on 2026-11-07. Registers are first-class
+auditable aggregates, while M6.2 JournalEntry/PostingLine remain the canonical posted
+financial amounts. A property operation, financial posting, primary assignment and
+register finalization are distinct explicit commands.
+
+### Reference definitions, identities and coverage
+
+Frozen `MemorialOrderType` records UUID, exact form identifier, variant, revision,
+authority reference, actor, authorization reference and aware registration timestamp.
+The exact form/variant/revision/authority tuple is unique. No official form is seeded,
+no journal infers its type, and a spreadsheet header does not certify applicability.
+
+Frozen `NumberingScope` is the smallest explicit registration-policy reference:
+UUID, ledger UUID, exact namespace, required policy reference and administrative
+evidence. `(ledger_id, namespace)` is unique and scopes are immutable. Accounting
+owners must establish a canonical namespace and its issuance procedure before use;
+the application cannot infer equivalence of differently named namespaces or verify
+the authority of supplied evidence. Scope registration deliberately does not create
+a numbering engine, account allocation policy, or general workflow framework.
+
+`MemorialOrderNumber(scope_id, value)` preserves an externally issued exact number.
+Register UUID and `(scope_id, issued_number)` are independently unique. Form identity,
+revision, scope, accounting period and coverage are distinct. Scope uniqueness does
+not reset with a type revision. No number allocation, sequence reset, calendar
+generation, or one-order-per-type/period rule is introduced.
+
+Frozen `MemorialOrder` owns a tuple of `MemorialOrderMembership` children and its
+status. Header identity includes UUID, type, ledger, accounting period, coverage,
+number, actor/authorization and aware creation timestamp. Coverage is a positive
+half-open date interval contained in one existing same-ledger accounting period;
+it can be a monthly subset of a wider period without redefining the posting calendar.
+Coverage and all identifying metadata are immutable from creation, including OPEN.
+Membership tuple order has no printed-row or legal chronological meaning.
+
+### Assignment and finalization
+
+`CreateMemorialOrder` requires registered ledger/period/type/scope references.
+`AssignJournalEntries` accepts a nonempty tuple of distinct existing posted journal
+UUIDs. All selected entries must match ledger and period and have effective dates
+inside coverage. The complete batch is validated before any child is staged. A
+membership stores only entry UUID, assignment actor, authorization and aware service
+timestamp; there are no duplicate amounts or account definitions in the register.
+
+Each JournalEntry belongs to at most one primary register across OPEN and FINALIZED
+orders. No partial posting-line assignment, secondary inclusion, deletion, reassignment,
+or amount splitting is supported. Journal documentary attribution remains many-to-many;
+different legitimate entries supported by one document remain distinct financial facts.
+
+`FinalizeMemorialOrder` permits only OPEN -> FINALIZED, with at least one member,
+nonblank actor/authorization evidence and an aware service timestamp. Finalization
+records the supplied evidence, freezes membership, and cannot repeat. It neither
+closes a period nor certifies that all its entries have been assigned. A later allowed
+posting may remain unassigned even within finalized coverage. No correction, reopening,
+late-document handling or electronic signature workflow is inferred.
+
+The existing UoW exposes one `memorial_orders` repository handling aggregate and
+simple reference access. It never loads an entire ledger history. Commands commit
+once explicitly and failures roll back the complete operation. Fakes publish private
+snapshots atomically and retain stale-commit rejection across all existing repositories.
+
+### Additive persistence and concurrency
+
+Forward-only `0009` follows `0008` and creates:
+
+| Table | Role |
+|---|---|
+| `accounting_memorial_order_types` | Immutable exact form revisions and supplied authority/evidence |
+| `accounting_memorial_numbering_scopes` | Immutable same-ledger canonical namespace and required policy reference |
+| `accounting_memorial_orders` | Identity, coverage, lifecycle, registration and finalization evidence |
+| `accounting_memorial_order_memberships` | Unique whole-entry primary membership and assignment evidence |
+
+Declarative records share Base and convert to plain frozen domain snapshots. Real
+composite FKs enforce order/period/ledger, order/scope/ledger and membership/entry/ledger
+relationships. A membership INSERT trigger verifies period and effective coverage
+against the existing immutable entry. Exact codes and issued numbers use C collation.
+Row checks enforce text, finite dates/timestamps and status/finalization consistency.
+
+Orders must be inserted OPEN. A lifecycle trigger permits only the narrow nonempty
+OPEN -> FINALIZED update and rejects identity changes or deletion. Types/scopes and
+memberships reject UPDATE/DELETE; every new table rejects TRUNCATE, including CASCADE.
+Protection covers ordinary SQL access, not administrators disabling triggers/schema.
+No cascade deletion, journal rewrite, regulatory seed, source-document remapping or
+existing membership backfill occurs. Downgrade refuses register audit-history removal.
+
+Assignment and finalization serialize through the same parent-order row lock held
+until commit. SQL repository retrieval refreshes header/children in subsequent reads
+after waiting. Direct INSERTs acquire that parent lock in a trigger and use a separate
+state read; direct finalization UPDATEs acquire the same row lock. Register writes
+require READ COMMITTED, reusing the M6.2 financial isolation requirement. With
+assignment first, finalization includes the committed members; with finalization
+first, assignment rejects the refreshed status. Unique entry membership also handles
+assignments racing across different orders; UUID/scoped-number constraints handle
+identity races. Lock timeout/deadlock/serialization failures require whole-command retry.
+
+Membership operations reference immutable journals without changing their chart/period
+locking protocol. Posting and supersession still coordinate chart first, then period
+where required. Register finalization introduces no closed-period coverage protection.
+Tests verify populated 0008 row/trigger preservation and Alembic/ORM agreement using
+uniquely named disposable databases on the existing isolated local test server.
+
+### Read projections and correspondence boundary
+
+`GetMemorialOrderTotals` returns status, member count, debit and credit turnover per
+currency, and amounts per original account UUID/version, currency and side, including
+historical code/name. Core SQL aggregates canonical posting lines without joining
+documentary memberships. It never adds debit and credit into one turnover figure,
+quantizes currency, converts FX or depends on ambient Decimal precision. Empty orders
+have zero members and no amount groups, rather than inventing a currency.
+
+`GetJournalRegisterEntries` requires ledger and explicit UNASSIGNED/OPEN/FINALIZED
+state, with optional accounting period. All three populations remain visible. DTOs
+identify entries, effective dates, instruction keys, currency and assigned order;
+they do not invent automatic eligibility/type classification. Reader calls use their
+own REPEATABLE READ, READ ONLY transaction, without UoW commit/autoflush. Multiple
+SELECTs see one snapshot. These are current-query snapshots, not a bitemporal model.
+
+Whole-entry membership is distinct from displayed correspondence rows. The reference
+workbook demonstrates a monthly presentation, document-based rows, paired-account
+summary, turnover and signature sections, but is not a verified current statutory
+template. Its older authority header is not seeded as an applicable revision. Only
+synthetic multi-document fixtures with three supplied correspondences are used; no
+real workbook or identifying contents enter this repository.
+
+M6.2 permits multiline debit/credit entries without arbitrary debit-credit pairing.
+No pairing is inferred from ordering and no amounts are allocated to match the form.
+Reports expose `correspondence_rendering_unsupported`; requests for correspondence
+rows raise `UnsupportedCorrespondenceRendering`. Form rendering and its exact turnover,
+pairing, grouping and signature rules remain subject to approved presentation policy.
+
+### Remaining policy and exclusions
+
+Production inputs still require approved applicable form/authority revisions,
+entry-to-type allocation, canonical numbering namespaces and issuance procedures,
+supporting-package sufficiency, legal finalization/signature authority, late-document
+and correction rules, and rendering semantics. Nonblank references record supplied
+evidence without certifying statutory compliance, signatures, RBAC or policy validity.
+
+No automatic posting, correspondence generation, Excel/PDF rendering, opening/trial
+balances, Journal-General, closing/reopening, corrections/reversals, depreciation,
+Flask UI or generic document/workflow engine is included.

@@ -39,6 +39,10 @@ class SqlAlchemyAccountingLedgerRepository:
     def add_period(self, period):
         self.session.add(AccountingPeriodRecord(**vars(period)))
 
+    def get_period(self, period_id):
+        record = self._get(AccountingPeriodRecord, period_id)
+        return period_from_record(record) if record is not None else None
+
     def get_period_for_update(self, period_id):
         try:
             with self.session.no_autoflush:
