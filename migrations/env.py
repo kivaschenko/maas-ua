@@ -6,6 +6,7 @@ from alembic import context
 from sqlalchemy import create_engine, pool
 from sqlalchemy.engine import make_url
 
+from maas_ua.adapters import journal_orm  # noqa: F401 -- register additive journal metadata
 from maas_ua.adapters.accounting_orm import Base
 
 config = context.config

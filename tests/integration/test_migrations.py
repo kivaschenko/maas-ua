@@ -29,13 +29,19 @@ def test_upgrade_downgrade_and_metadata_agree(database_url, migration_config):
                 "accounting_chart_versions",
                 "accounting_account_definitions",
                 "accounting_chart_supersessions",
+                "accounting_ledgers",
+                "accounting_periods",
+                "accounting_ledger_sources",
+                "accounting_journal_entries",
+                "accounting_posting_lines",
+                "accounting_journal_sources",
             }
             assert connection.scalar(text("SELECT version_num FROM alembic_version"))
         command.check(migration_config)
         with pytest.raises(RuntimeError, match="forward-only"):
             command.downgrade(migration_config, "0006")
         with engine.connect() as connection:
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0007"
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0008"
     finally:
         engine.dispose()
 
@@ -133,3 +139,55 @@ def test_historical_write_off_migration_remains_forward_only(database_url, migra
     command.upgrade(migration_config, "0006")
     with pytest.raises(RuntimeError, match="0006 is forward-only"):
         command.downgrade(migration_config, "0005")
+
+
+def test_journal_migration_preserves_populated_0007(database_url, migration_config, write_off_receipt):
+    from accounting_fixtures import chart, version
+    from sqlalchemy.orm import sessionmaker
+
+    from maas_ua.adapters.sqlalchemy import SqlAlchemyUnitOfWork
+    from maas_ua.service_layer.accounting import register_chart, register_chart_version
+
+    command.upgrade(migration_config, "0007")
+    engine = create_engine(database_url, hide_parameters=True)
+    try:
+        factory = sessionmaker(engine, autoflush=False, expire_on_commit=False)
+        scope = chart()
+        snapshot = version(scope.id)
+        register_chart(scope, SqlAlchemyUnitOfWork(factory))
+        register_chart_version(snapshot, SqlAlchemyUnitOfWork(factory))
+        with SqlAlchemyUnitOfWork(factory) as writer:
+            writer.nomenclatures.add(write_off_receipt.receipt.lines[0].nomenclature)
+            writer.receipts.add(write_off_receipt.receipt)
+            for unit in write_off_receipt.units:
+                writer.asset_units.add(unit)
+            writer.commit()
+        metadata = MetaData()
+        metadata.reflect(engine)
+        with engine.connect() as connection:
+            before = {
+                name: list(connection.execute(table.select().order_by(*table.primary_key)).mappings())
+                for name, table in metadata.tables.items()
+                if name != "alembic_version"
+            }
+        command.upgrade(migration_config, "head")
+        with engine.connect() as connection:
+            for name, rows in before.items():
+                table = metadata.tables[name]
+                assert list(connection.execute(table.select().order_by(*table.primary_key)).mappings()) == rows
+            assert connection.scalar(text("SELECT count(*) FROM accounting_journal_entries")) == 0
+            triggers = connection.scalars(
+                text("""SELECT tgname FROM pg_trigger
+                WHERE tgrelid = 'accounting_journal_entries'::regclass AND NOT tgisinternal""")
+            ).all()
+            assert set(triggers) == {
+                "immutable_rows",
+                "immutable_truncate",
+                "lock_journal_context",
+                "completed_journal",
+            }
+        command.check(migration_config)
+        with pytest.raises(RuntimeError, match="0008 is forward-only"):
+            command.downgrade(migration_config, "0007")
+    finally:
+        engine.dispose()

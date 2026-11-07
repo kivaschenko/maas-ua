@@ -12,6 +12,7 @@ from maas_ua.domain.accounting import (
     ChartVersion,
     SupersededChartVersion,
 )
+from maas_ua.domain.journal import AccountingLedger, AccountingPeriod, JournalEntry, LedgerSourceReference
 from maas_ua.domain.movements import MovementDocument
 from maas_ua.domain.receipts import AssetUnit, Nomenclature, ReceiptDocument, SerialNumber
 from maas_ua.domain.write_offs import WriteOffAsset, WriteOffDocument
@@ -89,7 +90,31 @@ class ChartRepository(Protocol):
     def apply_supersession(self, result: SupersededChartVersion) -> None: ...
 
 
+class AccountingLedgerRepository(Protocol):
+    def add(self, ledger: AccountingLedger) -> None: ...
+
+    def get(self, ledger_id: UUID) -> AccountingLedger | None: ...
+
+    def add_period(self, period: AccountingPeriod) -> None: ...
+
+    def get_period_for_update(self, period_id: UUID) -> AccountingPeriod | None: ...
+
+    def add_source(self, source: LedgerSourceReference) -> None: ...
+
+    def get_source(self, source_id: UUID) -> LedgerSourceReference | None: ...
+
+
+class JournalEntryRepository(Protocol):
+    def add(self, entry: JournalEntry) -> None: ...
+
+    def get(self, entry_id: UUID) -> JournalEntry | None: ...
+
+    def get_by_instruction(self, ledger_id: UUID, key: str) -> JournalEntry | None: ...
+
+
 class UnitOfWork(Protocol):
+    ledgers: AccountingLedgerRepository
+    journals: JournalEntryRepository
     charts: ChartRepository
     write_offs: WriteOffRepository
     movements: MovementRepository

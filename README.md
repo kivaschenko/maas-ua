@@ -4,7 +4,7 @@
 
 MAAS-UA is a Python application for traceable accounting of military property, initially focused on individually identified FPV drones and reusable unmanned aircraft systems (БпАК), with the longer-term goal of reconciling property registers and financial accounting.
 
-> **Status (2026-11-06):** M1–M5A and the M6.1 accounting reference foundation are implemented. M5A adds receipt-time accounting classification and documented write-off of serialized inventory, with financial-economic acceptance dates, atomic persistence, and historical lifecycle reporting. These are Python use cases; no Flask reporting endpoints or operational UI are implemented.
+> **Status (2026-11-07):** M1–M5A, M6.1 accounting references, and M6.2 manually authorized balanced financial journals are implemented. Property operations and financial posting remain separate Python use cases; no Flask reporting endpoints or operational UI are implemented.
 >
 > **Data handling:** Use synthetic records in code, fixtures, prompts, CI, documentation, logs, and public discussions. Do not publish real military inventory, serial numbers, unit identities, custody/location data, accounting documents, or operational details. Follow applicable authorization and data-handling requirements.
 
@@ -27,7 +27,8 @@ The system distinguishes property/custody accounting from financial accounting. 
 | Documented write-off of serialized inventory | Implemented (M5A); excludes fixed assets |
 | Reversal/corrections and legacy classification onboarding | Planned; business rules to confirm |
 | Approved chart versions, official/local accounts, typed dimensions, audited supersession | Implemented (M6.1) |
-| Fixed-asset amortization, accounting entries, reconciliation | Planned (M6.2+) |
+| Manually authorized immutable balanced financial journals | Implemented (M6.2) |
+| Fixed-asset amortization, automated postings, reconciliation | Planned |
 | Flask UI, Excel import/export integration and user-facing reports | Planned integration (M7+); verify any pre-existing scripts separately |
 
 Implemented milestones do **not** imply production authorization, legal accounting compliance, or a complete financial ledger.
@@ -101,7 +102,8 @@ A homogeneous receipt line of 27 FPV drones has 27 `AssetUnit` records, each poi
 - **M5A — Implemented:** documented serialized-inventory write-off and historical accounting membership.
 - **M5+ — Proposed:** correction/reversal and legacy onboarding policies.
 - **M6.1 — Implemented:** immutable accounting reference snapshots, typed dimensions and controlled supersession.
-- **M6.2+ — Proposed:** journal entries, memorial orders, financial reports and approved period/correction rules.
+- **M6.2 — Implemented:** explicit ledgers, permitted periods, document attribution, and manually authorized immutable balanced journals.
+- **M6.3+ — Proposed:** memorial orders, financial reports, automated postings and approved closing/correction rules.
 - **M7 — Proposed:** Flask web workflows, Excel import/export, reports and regression tests.
 
 The roadmap is a planning tool, not an assertion of final approved accounting functionality.
@@ -220,8 +222,8 @@ this milestone. See [the confirmed domain rules](docs/architecture/domain-model.
 
 The Property Ledger and Financial Accounting Ledger share document provenance but
 have different responsibilities. M6.1 supplies reference data for the latter;
-there are no journal entries, postings, memorial orders, financial reports or
-period-closing commands. Receipt/transfer/write-off commands retain M1–M5A behavior.
+M6.2 adds the manual journal below. Memorial orders, financial reports and
+period-closing commands remain absent. Receipt/transfer/write-off commands retain M1–M5A behavior.
 
 `domain/accounting.py` defines frozen `ChartOfAccounts`, `ChartVersion`,
 `AccountDefinition` and `AccountingDimensions`. A chart carries an opaque accounting
@@ -257,12 +259,11 @@ predecessors cannot be shortened again; version contents and original starts can
 be edited. Ordinary registration permits disjoint intervals, including gaps; no general
 policy of gap-free chart coverage has been assumed.
 
-`ChartRepository.protected_through(version_id)` is the narrow integration point for
-future posting/closed-period protection. It returns `None` in M6.1 because neither kind
-of financial record exists. The domain rejects a cutover on or before a protected date.
-Before future financial records are introduced, their maximum protected date must be
-queried here, and posting/period commands must coordinate using the same chart lock.
-M6.1 does not pretend to inspect nonexistent postings or implement period controls.
+`ChartRepository.protected_through(version_id)` now returns the latest posted accounting
+effective date for that version across all ledgers. Supersession rejects a cutover on or
+before that date. Posting and supersession coordinate through the same chart lock.
+Future period closing must extend this protection to closed-period coverage, including
+periods without postings; closing is not implemented in M6.2.
 
 Dimensions have optional `FundRef`, `BudgetProgramCode`, `KEKVCode`, `FundingSourceRef`,
 `ReportingUnitRef`, `CounterpartyRef` and a local account-definition UUID. Reference values
@@ -283,10 +284,74 @@ Supported APIs provide immutability; unrestricted administrative SQL is outside 
 boundary. Domain validation additionally checks cycles, mapping target kinds and hierarchy
 consistency. Apply shared-database migrations only through the approved deployment process.
 
-Balance-account double-entry equality and applicable off-balance single-entry treatment
-remain distinct future behaviors. M6.1 implements neither. The selected entity, approved
+Balance-account double-entry equality is implemented in M6.2; off-balance single-entry
+treatment remains separate future behavior. The selected entity, approved
 codes/names, local suffix meanings, analytical requirements and future posting policies
 remain business-owner inputs. See [the M6.1 domain contract](docs/architecture/domain-model.md#22-milestone-61--accounting-reference-data-and-version-management).
+
+## M6.2: Manually authorized financial journal
+
+`domain/journal.py` defines frozen `AccountingLedger`, `AccountingPeriod`,
+`LedgerSourceReference`, `JournalEntry`, `PostingLine` and `PostingSide`. Ledger identity
+explicitly selects one chart and its accounting entity. The first use case uses one
+registered ledger; persistence supports multiple ledgers without inter-ledger posting.
+
+Use these functions from `service_layer/journal.py`, each with its own UoW:
+
+1. `register_accounting_ledger(ledger, uow)` selects a registered chart.
+2. `register_accounting_period(period, uow)` records an explicit bounded `[starts_on,
+   ends_before)` interval, posting permission, actor and authorization reference.
+   Periods cannot overlap within a ledger; no calendar is generated.
+3. `attribute_ledger_source(source, uow)` explicitly attributes an existing receipt or
+   write-off to that ledger through typed document FKs. A document has one attribution
+   in M6.2; sharing it across ledgers requires a later approved workflow.
+4. `post_journal_entry(PostJournalEntry(...), uow)` validates and commits a complete
+   immutable financial entry. The command supplies `id`, `ledger_id`, `version_id`,
+   `period_id`, stable `posting_instruction_key`, `effective_date`, `currency`, `purpose`,
+   `actor_ref`, `authorization_reference`, `lines`, and `source_reference_ids`.
+   The service records an aware registration timestamp.
+
+Every entry requires debit and credit lines with strictly positive finite Decimal
+amounts and exact equality in one explicit currency. Accounts must be posting-enabled
+`BALANCE` definitions from the selected version applicable on the accounting effective
+date. Typed dimensions are stored per line, including same-version local analytics.
+No mandatory analytics, currency list, rounding, FX or correspondence is inferred.
+Receipt `Money` behavior remains unchanged, including zero acquisition prices.
+
+UUID reuse and exact `(ledger_id, posting_instruction_key)` reuse are rejected, rather
+than silently replayed. Distinct legitimate components of a source use distinct stable
+business instruction keys. One entry may reference several documents, and one source
+may support several entries. An instruction key is an application identity contract,
+not a regulatory code; callers must reuse it on retries.
+
+Forward-only `0008` adds six financial tables: ledgers, periods, source attributions,
+journal headers, posting lines and journal-source memberships. Composite FKs enforce
+ledger/chart/version/period/source relationships. Deferred constraint triggers validate
+complete child counts, debit/credit equality and posting eligibility at commit. Row
+CHECK constraints alone do not enforce journal balance. Immutable expected child counts
+prevent late inserts, including additional balanced lines, from extending a journal.
+Triggers reject UPDATE, DELETE, TRUNCATE and conflict-update changes to financial history.
+They also guard used chart snapshots against changes that invalidate posted history.
+
+Posting locks the chart row, then the period row, refreshes references, stages the
+aggregate and commits once. Direct header inserts follow the same lock order. Future
+closing must acquire those locks in that order, re-read permission/history and retain
+locks through commit; its migration must explicitly replace the current immutable-period
+guard. Financial writes and protected chart changes require PostgreSQL `READ COMMITTED`,
+matching the configured application default. Snapshot-isolation writes are rejected to
+avoid stale validation after lock waits. Read-only inventory reports retain their existing
+`REPEATABLE READ` snapshots. Trigger functions fix their search path to prevent temporary
+tables from shadowing integrity queries. Deadlocks, lock timeouts and serialization
+failures retain whole-command retry semantics; failures roll back the complete journal.
+
+No property operation automatically posts financial entries. Actor/authorization fields
+record supplied administrative evidence without verifying legal authority, signatures or
+RBAC. Approved required analytics, currency/rounding policy, document-package sufficiency,
+instruction-key issuance and source-to-journal date relationships remain policy inputs.
+No extra backdating/future-date restriction is imposed beyond the selected period and
+chart applicability. Closing/reopening, corrections/reversals, memorial orders, opening
+balances, off-balance operations, depreciation, reports and Flask UI remain excluded.
+Migration tests use disposable databases only; no shared database is migrated automatically.
 
 ## Testing strategy
 

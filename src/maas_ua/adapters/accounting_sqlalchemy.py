@@ -3,7 +3,7 @@
 from datetime import date
 from uuid import UUID
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, selectinload
 
@@ -138,10 +138,18 @@ class SqlAlchemyChartRepository:
         return supersession_from_record(record) if record is not None else None
 
     def protected_through(self, version_id: UUID) -> date | None:
-        # There are no financial postings or period records in M6.1. When added,
-        # query their protected dates here while holding the same chart lock;
-        # posting and period commands must coordinate with this lock as well.
-        return None
+        from maas_ua.adapters.journal_orm import JournalEntryRecord
+
+        with self.session.no_autoflush:
+            recorded = self.session.scalar(
+                select(func.max(JournalEntryRecord.effective_date)).where(JournalEntryRecord.version_id == version_id)
+            )
+        pending = [
+            item.effective_date
+            for item in self.session.new
+            if isinstance(item, JournalEntryRecord) and item.version_id == version_id
+        ]
+        return max(([recorded] if recorded is not None else []) + pending, default=None)
 
     def apply_supersession(self, result: SupersededChartVersion) -> None:
         if self.get_version(result.predecessor.id) != result.predecessor:

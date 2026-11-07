@@ -16,10 +16,11 @@ from maas_ua.ports import RepositoryConflict
 
 
 class FakeChartRepository:
-    def __init__(self, charts, versions, supersessions):
+    def __init__(self, charts, versions, supersessions, journals=None):
         self._charts = dict(charts)
         self._versions = dict(versions)
         self._supersessions = dict(supersessions)
+        self._journals = journals if journals is not None else {}
 
     def add_chart(self, chart: ChartOfAccounts) -> None:
         if chart.id in self._charts:
@@ -67,9 +68,7 @@ class FakeChartRepository:
         return self._supersessions.get(transition_id)
 
     def protected_through(self, version_id: UUID) -> date | None:
-        # M6.1 has neither posted financial records nor closed financial periods.
-        # Future consumers must compute their protection under the same chart lock.
-        return None
+        return max((e.effective_date for e in self._journals.values() if e.version_id == version_id), default=None)
 
     def apply_supersession(self, result: SupersededChartVersion) -> None:
         if result.audit.id in self._supersessions:

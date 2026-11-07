@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, selectinload
 
 from maas_ua.adapters.accounting_sqlalchemy import SqlAlchemyChartRepository
+from maas_ua.adapters.journal_sqlalchemy import SqlAlchemyAccountingLedgerRepository, SqlAlchemyJournalEntryRepository
 from maas_ua.adapters.orm import (
     AssetUnitRecord,
     MovementDocumentRecord,
@@ -31,6 +32,7 @@ from maas_ua.adapters.orm import (
     write_off_to_record,
 )
 from maas_ua.domain.accounting import ChartVersionConflict
+from maas_ua.domain.journal import DuplicateJournalEntry, InvalidJournalEntry
 from maas_ua.domain.movements import DuplicateMovement, MovementDocument
 from maas_ua.domain.receipts import (
     AccountingClassification,
@@ -289,6 +291,8 @@ class SqlAlchemyUnitOfWork:
         self.receipts = SqlAlchemyReceiptRepository(self.session)
         self.asset_units = SqlAlchemyAssetUnitRepository(self.session)
         self.charts = SqlAlchemyChartRepository(self.session)
+        self.ledgers = SqlAlchemyAccountingLedgerRepository(self.session)
+        self.journals = SqlAlchemyJournalEntryRepository(self.session)
         self.movements = SqlAlchemyMovementRepository(self.session)
         self.write_offs = SqlAlchemyWriteOffRepository(self.session)
         self._active = True
@@ -316,6 +320,18 @@ class SqlAlchemyUnitOfWork:
         except IntegrityError as error:
             self.session.rollback()
             constraint = getattr(getattr(error.orig, "diag", None), "constraint_name", None)
+            if constraint in {"pk_accounting_journal_entries", "uq_accounting_journals_instruction"}:
+                raise DuplicateJournalEntry(
+                    "journal identity or business posting instruction already registered"
+                ) from None
+            if constraint in {
+                "ck_accounting_journal_complete",
+                "ck_accounting_journal_references",
+                "ck_accounting_history_immutable",
+            }:
+                raise InvalidJournalEntry(
+                    "financial integrity or immutable history constraint prevents posting"
+                ) from None
             if constraint in {
                 "pk_accounting_charts",
                 "pk_accounting_chart_versions",
