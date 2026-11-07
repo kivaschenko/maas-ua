@@ -1,9 +1,17 @@
 """Aggregate persistence contracts used by receipt and transfer commands."""
 
+from datetime import date
 from types import TracebackType
 from typing import Protocol, Self
 from uuid import UUID
 
+from maas_ua.domain.accounting import (
+    AccountDefinition,
+    ChartOfAccounts,
+    ChartSupersession,
+    ChartVersion,
+    SupersededChartVersion,
+)
 from maas_ua.domain.movements import MovementDocument
 from maas_ua.domain.receipts import AssetUnit, Nomenclature, ReceiptDocument, SerialNumber
 from maas_ua.domain.write_offs import WriteOffAsset, WriteOffDocument
@@ -57,7 +65,32 @@ class WriteOffRepository(Protocol):
     def get(self, document_id: UUID) -> WriteOffDocument | None: ...
 
 
+class ChartRepository(Protocol):
+    def add_chart(self, chart: ChartOfAccounts) -> None: ...
+
+    def get_chart(self, chart_id: UUID) -> ChartOfAccounts | None: ...
+
+    def get_chart_for_update(self, chart_id: UUID) -> ChartOfAccounts | None: ...
+
+    def add_version(self, version: ChartVersion) -> None: ...
+
+    def get_version(self, version_id: UUID) -> ChartVersion | None: ...
+
+    def versions_for_chart(self, chart_id: UUID) -> tuple[ChartVersion, ...]: ...
+
+    def version_as_of(self, chart_id: UUID, as_of: date) -> ChartVersion | None: ...
+
+    def get_account(self, account_id: UUID) -> AccountDefinition | None: ...
+
+    def get_supersession(self, transition_id: UUID) -> ChartSupersession | None: ...
+
+    def protected_through(self, version_id: UUID) -> date | None: ...
+
+    def apply_supersession(self, result: SupersededChartVersion) -> None: ...
+
+
 class UnitOfWork(Protocol):
+    charts: ChartRepository
     write_offs: WriteOffRepository
     movements: MovementRepository
     nomenclatures: NomenclatureRepository

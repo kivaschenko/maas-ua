@@ -4,7 +4,7 @@
 
 MAAS-UA is a Python application for traceable accounting of military property, initially focused on individually identified FPV drones and reusable unmanned aircraft systems (БпАК), with the longer-term goal of reconciling property registers and financial accounting.
 
-> **Status (2026-11-03):** M1–M4 and M5A are implemented. M5A adds receipt-time accounting classification and documented write-off of serialized inventory, with financial-economic acceptance dates, atomic persistence, and historical lifecycle reporting. These are Python use cases; no Flask reporting endpoints or operational UI are implemented.
+> **Status (2026-11-06):** M1–M5A and the M6.1 accounting reference foundation are implemented. M5A adds receipt-time accounting classification and documented write-off of serialized inventory, with financial-economic acceptance dates, atomic persistence, and historical lifecycle reporting. These are Python use cases; no Flask reporting endpoints or operational UI are implemented.
 >
 > **Data handling:** Use synthetic records in code, fixtures, prompts, CI, documentation, logs, and public discussions. Do not publish real military inventory, serial numbers, unit identities, custody/location data, accounting documents, or operational details. Follow applicable authorization and data-handling requirements.
 
@@ -26,7 +26,8 @@ The system distinguishes property/custody accounting from financial accounting. 
 | Exact serial lookup, provenance/history, historical custody, quantity and acquisition valuation | Implemented (M4); incomplete history is explicit |
 | Documented write-off of serialized inventory | Implemented (M5A); excludes fixed assets |
 | Reversal/corrections and legacy classification onboarding | Planned; business rules to confirm |
-| Fixed-asset amortization, accounting entries, reconciliation | Planned (M6+) |
+| Approved chart versions, official/local accounts, typed dimensions, audited supersession | Implemented (M6.1) |
+| Fixed-asset amortization, accounting entries, reconciliation | Planned (M6.2+) |
 | Flask UI, Excel import/export integration and user-facing reports | Planned integration (M7+); verify any pre-existing scripts separately |
 
 Implemented milestones do **not** imply production authorization, legal accounting compliance, or a complete financial ledger.
@@ -99,7 +100,8 @@ A homogeneous receipt line of 27 FPV drones has 27 `AssetUnit` records, each poi
 - **M4 — Implemented:** immutable initial custody, transfer order, traceability queries, historical quantity/acquisition valuation and PostgreSQL tests.
 - **M5A — Implemented:** documented serialized-inventory write-off and historical accounting membership.
 - **M5+ — Proposed:** correction/reversal and legacy onboarding policies.
-- **M6 — Proposed:** fixed-asset accounting, depreciation, ledger analytics, reconciliation.
+- **M6.1 — Implemented:** immutable accounting reference snapshots, typed dimensions and controlled supersession.
+- **M6.2+ — Proposed:** journal entries, memorial orders, financial reports and approved period/correction rules.
 - **M7 — Proposed:** Flask web workflows, Excel import/export, reports and regression tests.
 
 The roadmap is a planning tool, not an assertion of final approved accounting functionality.
@@ -213,6 +215,78 @@ unknown classifications need a separately approved onboarding/correction process
 Fixed-asset disposal, depreciation, journal entries, reversals, legal evidence
 verification, signature/role enforcement, closed periods and Flask UI remain outside
 this milestone. See [the confirmed domain rules](docs/architecture/domain-model.md#21-milestone-5a--documented-serialized-inventory-write-off).
+
+## M6.1: Accounting reference data
+
+The Property Ledger and Financial Accounting Ledger share document provenance but
+have different responsibilities. M6.1 supplies reference data for the latter;
+there are no journal entries, postings, memorial orders, financial reports or
+period-closing commands. Receipt/transfer/write-off commands retain M1–M5A behavior.
+
+`domain/accounting.py` defines frozen `ChartOfAccounts`, `ChartVersion`,
+`AccountDefinition` and `AccountingDimensions`. A chart carries an opaque accounting
+entity reference; callers select its UUID explicitly. An approved version contains a
+complete immutable tuple of the selected approved definitions, an exact version label,
+approval reference, aware creation timestamp, and half-open applicability
+`[valid_from, valid_to)`. `None` means an open end. Accounts inherit version validity;
+there are no independent account intervals or automatic expiration dates.
+
+`AccountKind.OFFICIAL` and `LOCAL_ANALYTICAL` distinguish official definitions from
+local analytical extensions. A local definition must explicitly reference an official
+account in its version. Codes such as `1518/03.01` are exact opaque text: no prefix,
+slash or suffix is interpreted. Names, hierarchy, mappings, authority references,
+`AccountBasis.BALANCE` / `OFF_BALANCE` and posting eligibility are immutable metadata.
+Posting eligibility is independent of having children and does not implement a posting
+rule. No regulatory definitions or mappings are seeded by migration or startup.
+
+Use `register_chart` and `register_chart_version` from `service_layer/accounting.py`
+with the existing fake or SQL UoW. `uow.charts` supports chart/version/account lookup,
+version listing and `version_as_of(chart_id, business_date)`; retrieve an exact code
+through the returned version's `account_by_code`. No applicable version returns
+`None`; an ambiguous result is an error. Account UUIDs remain historical references;
+a successor uses new definition UUIDs even when its codes are unchanged.
+
+`SupersedeChartVersion` / `supersede_chart_version` is the only supported applicability
+change. Supply a retry-stable transition UUID, predecessor UUID, approved successor
+snapshot, actor reference and reason. The service locks the chart, refreshes the
+predecessor, checks its open-ended interval and successor identity/start, closes the
+predecessor at the successor's exact start, inserts the successor and transition audit,
+and commits once. No gap is introduced at this boundary. Failures roll back the closure,
+new definitions and audit together. Repeated transition UUIDs are rejected. Closed
+predecessors cannot be shortened again; version contents and original starts cannot
+be edited. Ordinary registration permits disjoint intervals, including gaps; no general
+policy of gap-free chart coverage has been assumed.
+
+`ChartRepository.protected_through(version_id)` is the narrow integration point for
+future posting/closed-period protection. It returns `None` in M6.1 because neither kind
+of financial record exists. The domain rejects a cutover on or before a protected date.
+Before future financial records are introduced, their maximum protected date must be
+queried here, and posting/period commands must coordinate using the same chart lock.
+M6.1 does not pretend to inspect nonexistent postings or implement period controls.
+
+Dimensions have optional `FundRef`, `BudgetProgramCode`, `KEKVCode`, `FundingSourceRef`,
+`ReportingUnitRef`, `CounterpartyRef` and a local account-definition UUID. Reference values
+preserve exact nonblank text; no regulatory code lists or mandatory combinations are
+invented. `validate_accounting_dimensions(dimensions, version_id, uow)` checks that a
+local reference resolves to a registered `LOCAL_ANALYTICAL` definition in the selected
+version. Dimensions have no persistence table or EAV model and do not translate
+`ReceiptLine.analytics`, custody, serials or provenance into financial attributes.
+
+Forward-only migration `0007` adds exactly four tables: `accounting_charts`,
+`accounting_chart_versions`, `accounting_account_definitions`, and
+`accounting_chart_supersessions`. It installs PostgreSQL's `btree_gist` extension for
+UUID-plus-date-range exclusion constraints. Deployment requires permission to install
+that extension or prior provisioning. Exact code/label uniqueness, same-version FKs
+and a GiST exclusion constraint defend concurrent registrations at the database level.
+There is no data seeding or modification of property tables or migrations `0001`–`0006`.
+Supported APIs provide immutability; unrestricted administrative SQL is outside that
+boundary. Domain validation additionally checks cycles, mapping target kinds and hierarchy
+consistency. Apply shared-database migrations only through the approved deployment process.
+
+Balance-account double-entry equality and applicable off-balance single-entry treatment
+remain distinct future behaviors. M6.1 implements neither. The selected entity, approved
+codes/names, local suffix meanings, analytical requirements and future posting policies
+remain business-owner inputs. See [the M6.1 domain contract](docs/architecture/domain-model.md#22-milestone-61--accounting-reference-data-and-version-management).
 
 ## Testing strategy
 

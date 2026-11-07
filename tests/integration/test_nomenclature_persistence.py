@@ -87,8 +87,14 @@ def test_database_rejects_missing_catalog_reference_without_service(session_fact
         line_total=Money(Decimal(1), "UAH"),
         serial_numbers=(SerialNumber("EXAMPLE", "1"),),
     )
+    from maas_ua.adapters.orm import receipt_to_record
+
     with SqlAlchemyUnitOfWork(session_factory) as writer:
-        writer.receipts.add(result.receipt)
+        with pytest.raises(RepositoryConflict, match="nomenclature must already exist"):
+            writer.receipts.add(result.receipt)
+    # Bypass the repository's existing early check to exercise the database FK.
+    with SqlAlchemyUnitOfWork(session_factory) as writer:
+        writer.session.add(receipt_to_record(result.receipt))
         with pytest.raises(RepositoryConflict):
             writer.commit()
 

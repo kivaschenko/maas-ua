@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, selectinload
 
+from maas_ua.adapters.accounting_sqlalchemy import SqlAlchemyChartRepository
 from maas_ua.adapters.orm import (
     AssetUnitRecord,
     MovementDocumentRecord,
@@ -29,6 +30,7 @@ from maas_ua.adapters.orm import (
     write_off_from_record,
     write_off_to_record,
 )
+from maas_ua.domain.accounting import ChartVersionConflict
 from maas_ua.domain.movements import DuplicateMovement, MovementDocument
 from maas_ua.domain.receipts import (
     AccountingClassification,
@@ -286,6 +288,7 @@ class SqlAlchemyUnitOfWork:
         self.nomenclatures = SqlAlchemyNomenclatureRepository(self.session)
         self.receipts = SqlAlchemyReceiptRepository(self.session)
         self.asset_units = SqlAlchemyAssetUnitRepository(self.session)
+        self.charts = SqlAlchemyChartRepository(self.session)
         self.movements = SqlAlchemyMovementRepository(self.session)
         self.write_offs = SqlAlchemyWriteOffRepository(self.session)
         self._active = True
@@ -313,6 +316,18 @@ class SqlAlchemyUnitOfWork:
         except IntegrityError as error:
             self.session.rollback()
             constraint = getattr(getattr(error.orig, "diag", None), "constraint_name", None)
+            if constraint in {
+                "pk_accounting_charts",
+                "pk_accounting_chart_versions",
+                "pk_accounting_account_definitions",
+                "pk_accounting_chart_supersessions",
+                "uq_accounting_chart_versions_label",
+                "uq_accounting_account_definitions_code",
+                "ex_accounting_chart_versions_validity",
+                "uq_accounting_chart_supersessions_predecessor",
+                "uq_accounting_chart_supersessions_successor",
+            }:
+                raise ChartVersionConflict("accounting reference identity, code or applicability conflict") from None
             if constraint == "pk_write_off_documents":
                 raise DuplicateWriteOff("write-off identity already processed") from None
             if constraint == "uq_write_off_lines_asset_unit_id":

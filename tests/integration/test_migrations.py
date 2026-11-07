@@ -25,13 +25,17 @@ def test_upgrade_downgrade_and_metadata_agree(database_url, migration_config):
                 "movement_lines",
                 "write_off_documents",
                 "write_off_lines",
+                "accounting_charts",
+                "accounting_chart_versions",
+                "accounting_account_definitions",
+                "accounting_chart_supersessions",
             }
             assert connection.scalar(text("SELECT version_num FROM alembic_version"))
         command.check(migration_config)
         with pytest.raises(RuntimeError, match="forward-only"):
-            command.downgrade(migration_config, "0005")
+            command.downgrade(migration_config, "0006")
         with engine.connect() as connection:
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0006"
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0007"
     finally:
         engine.dispose()
 
@@ -123,3 +127,9 @@ def test_historical_inventory_migration_remains_forward_only(database_url, migra
     command.upgrade(migration_config, "0005")
     with pytest.raises(RuntimeError, match="0005 is forward-only"):
         command.downgrade(migration_config, "0004")
+
+
+def test_historical_write_off_migration_remains_forward_only(database_url, migration_config):
+    command.upgrade(migration_config, "0006")
+    with pytest.raises(RuntimeError, match="0006 is forward-only"):
+        command.downgrade(migration_config, "0005")
