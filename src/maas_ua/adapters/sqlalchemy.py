@@ -10,6 +10,8 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, selectinload
 
 from maas_ua.adapters.accounting_sqlalchemy import SqlAlchemyChartRepository
+from maas_ua.adapters.journal_sqlalchemy import SqlAlchemyAccountingLedgerRepository, SqlAlchemyJournalEntryRepository
+from maas_ua.adapters.memorial_sqlalchemy import SqlAlchemyMemorialOrderRepository
 from maas_ua.adapters.orm import (
     AssetUnitRecord,
     MovementDocumentRecord,
@@ -31,6 +33,8 @@ from maas_ua.adapters.orm import (
     write_off_to_record,
 )
 from maas_ua.domain.accounting import ChartVersionConflict
+from maas_ua.domain.journal import DuplicateJournalEntry, InvalidJournalEntry
+from maas_ua.domain.memorial_orders import DuplicateMemorialOrder, DuplicatePrimaryMembership, InvalidMemorialOrder
 from maas_ua.domain.movements import DuplicateMovement, MovementDocument
 from maas_ua.domain.receipts import (
     AccountingClassification,
@@ -289,6 +293,9 @@ class SqlAlchemyUnitOfWork:
         self.receipts = SqlAlchemyReceiptRepository(self.session)
         self.asset_units = SqlAlchemyAssetUnitRepository(self.session)
         self.charts = SqlAlchemyChartRepository(self.session)
+        self.ledgers = SqlAlchemyAccountingLedgerRepository(self.session)
+        self.journals = SqlAlchemyJournalEntryRepository(self.session)
+        self.memorial_orders = SqlAlchemyMemorialOrderRepository(self.session)
         self.movements = SqlAlchemyMovementRepository(self.session)
         self.write_offs = SqlAlchemyWriteOffRepository(self.session)
         self._active = True
@@ -316,6 +323,31 @@ class SqlAlchemyUnitOfWork:
         except IntegrityError as error:
             self.session.rollback()
             constraint = getattr(getattr(error.orig, "diag", None), "constraint_name", None)
+            if constraint in {"uq_memorial_primary_membership", "pk_accounting_memorial_order_memberships"}:
+                raise DuplicatePrimaryMembership("entry already assigned to a primary register") from None
+            if constraint in {
+                "pk_accounting_memorial_orders",
+                "pk_accounting_memorial_order_types",
+                "pk_accounting_memorial_numbering_scopes",
+                "uq_memorial_order_identity",
+                "uq_memorial_type_revision",
+                "uq_memorial_numbering_namespace",
+            }:
+                raise DuplicateMemorialOrder("register or reference identity already registered") from None
+            if constraint in {"ck_memorial_integrity", "ck_memorial_immutable"}:
+                raise InvalidMemorialOrder("register integrity or immutable history prevents command") from None
+            if constraint in {"pk_accounting_journal_entries", "uq_accounting_journals_instruction"}:
+                raise DuplicateJournalEntry(
+                    "journal identity or business posting instruction already registered"
+                ) from None
+            if constraint in {
+                "ck_accounting_journal_complete",
+                "ck_accounting_journal_references",
+                "ck_accounting_history_immutable",
+            }:
+                raise InvalidJournalEntry(
+                    "financial integrity or immutable history constraint prevents posting"
+                ) from None
             if constraint in {
                 "pk_accounting_charts",
                 "pk_accounting_chart_versions",

@@ -17,5 +17,7 @@ def make_session_factory(
     url = make_url(value)
     if url.drivername != "postgresql+psycopg":
         raise ValueError("persistence requires a postgresql+psycopg URL")
-    engine = create_engine(url, hide_parameters=True)
+    # Financial posting and chart supersession require a fresh statement
+    # snapshot after waiting for their shared chart lock.
+    engine = create_engine(url, hide_parameters=True, isolation_level="READ COMMITTED")
     return sessionmaker(engine, autoflush=False, expire_on_commit=False)

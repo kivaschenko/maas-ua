@@ -700,12 +700,12 @@ inserting audit evidence happen in one transaction with one explicit commit. Val
 staging or commit failure rolls back every change.
 
 The repository exposes `protected_through(version_id)` as a narrowly scoped future
-integration point. It returns `None` now: there are no journal entries or financial
-periods to protect. Pure domain and fake-service tests exercise refusal at a protected
+integration point. In M6.1 it returned `None`: there were no journal entries or financial
+periods to protect. Pure domain and fake-service tests exercised refusal at a protected
 posting/closed-period boundary. Before those financial records exist, the production
 repository must query their latest protected date, and their writing/closing commands
 must coordinate with the same chart lock. This is an explicit integration obligation,
-not a claim that M6.1 validates nonexistent posted records.
+fulfilled for posted journals in M6.2 below; closed-period protection remains future work.
 
 ### Typed dimensions
 
@@ -779,3 +779,324 @@ posting/correction rules, periods and memorial registers remain business-owner i
 No regulatory compliance or authorization/signature verification is inferred from a
 nonblank approval reference. M6.1 supplies no JournalEntry, PostingLine, MemorialOrder,
 automatic accounting, financial reports, closing, reversals, or Flask UI.
+
+
+## 23. Milestone 6.2 — manually authorized balanced financial journals
+
+Architecture and implementation scope approved by the user on 2026-11-07, with
+the Phase 0 review adjustments. These are financial records alongside the Property
+Ledger; registering a receipt, transfer or write-off never automatically creates them.
+
+### Domain and aggregate boundaries
+
+Frozen `AccountingLedger(id, chart_id)` selects an existing chart and its explicitly
+identified accounting entity. The first use case registers one ledger; the schema
+supports multiple ledgers without an inter-ledger transaction model. No ledger,
+account, calendar or policy is seeded. Ledger/chart binding has no edit workflow.
+
+Frozen `AccountingPeriod` has UUID, ledger UUID, finite bounded interval
+`[starts_on, ends_before)`, explicit boolean `posting_allowed`, actor reference,
+authorization reference and aware registration timestamp. Same-ledger periods cannot
+overlap. Gaps and disallowed periods are representable; missing/forbidden dates reject
+posting. There is no automatic monthly calendar or close/reopen operation.
+
+`JournalEntry` is the immutable aggregate root. It owns ordered tuples of `PostingLine`
+and source-attribution UUIDs. A line's identity is `(entry_id, position)`; it has no
+independent repository or lifecycle. Entry fields are caller UUID, ledger/chart/version/
+period UUIDs, exact `posting_instruction_key`, accounting effective date, explicit
+currency, purpose, actor and authorization references, and aware service registration
+timestamp. Each line has account-definition UUID, explicit `PostingSide.DEBIT` or
+`CREDIT`, `Money`, and frozen `AccountingDimensions`. Input collections are snapshotted.
+
+`JournalEntryRepository` exposes add/get/get-by-instruction without save/delete.
+`AccountingLedgerRepository` handles simple ledger, period and source-attribution
+registration/lookups, including locked period retrieval. It does not load a ledger's
+entire history. The existing UoW exposes `ledgers` and `journals` alongside all property
+and chart repositories. Fakes retain private snapshots, one atomic publication, and
+stale-commit rejection.
+
+### Explicit documentary attribution
+
+Existing property documents have no ledger ownership field. `LedgerSourceReference`
+therefore records an explicit financial attribution to a ledger, with actor,
+authorization reference and aware timestamp. Exactly one typed document reference is
+required: receipt UUID or write-off UUID, backed by an FK to the original document.
+Attribution requires that document to exist and preserves its original fields.
+
+In this slice a document has one immutable attribution, including across ledgers.
+There is no automatic cross-ledger reuse or attribution transfer. This conservative
+boundary does not establish a general centralized-accounting policy; a later sharing
+workflow needs approval before relaxing it.
+
+An attribution may support any number of distinct journal instructions. One entry
+may reference several attributed documents, without repeating the same attribution
+inside that entry. Journal membership never imposes global source-document uniqueness.
+Source document dates, authorization evidence and original property history remain
+retrievable. Financial dimension values are supplied explicitly; property analytics,
+custody, acquisition values and classifications do not infer posting lines.
+
+Actor and authorization references record supplied administrative evidence. They do
+not independently verify legal authority, package sufficiency, signatures or RBAC.
+No approval workflow or attachment system is introduced.
+
+### Invariants and command contract
+
+`register_accounting_ledger`, `register_accounting_period` and `attribute_ledger_source`
+register explicit financial references through one UoW each. `PostJournalEntry` supplies
+the entry fields, ordered posting lines and existing source-attribution UUIDs; the
+service derives chart identity from the ledger and records `created_at` from its clock.
+
+A valid entry requires:
+
+- At least one debit and one credit, strictly positive finite Decimal amounts, and
+  exact debit/credit equality. Summation does not depend on ambient Decimal precision.
+- One explicit currency shared by every input line. The database stores currency once
+  on the header and unconstrained NUMERIC line amounts. There is no quantization,
+  balancing difference, FX or invented account correspondence.
+- Existing posting-enabled `BALANCE` account definitions in the selected approved
+  version. Its half-open applicability must include the accounting effective date.
+- A period in the entry ledger that contains that date and explicitly permits posting.
+- Matching ledger/chart/version relationships and existing documentary attributions
+  to the same ledger. No arbitrary unchecked document UUID is accepted.
+- Typed dimensions. Local analytics must identify a `LOCAL_ANALYTICAL` definition in
+  the same version. Optional opaque text references do not establish authoritative
+  catalog membership or introduce mandatory analytics.
+
+Receipt `Money` remains finite and nonnegative, including zero. Journal positivity is
+an additional line invariant, without changing existing acquisition valuation.
+Document dates, journal effective date and registration timestamp remain distinct.
+There is no new source-to-journal date equality, backdating rule or future-date rule
+beyond chart applicability and permitted period membership.
+
+Both caller UUID and exact `(ledger_id, posting_instruction_key)` are unique.
+Reusing either raises `DuplicateJournalEntry`, including a fresh UUID with an old
+instruction key; there is no silent successful replay. Callers reuse both on retries
+and may retrieve the committed entry after an uncertain response. Different legitimate
+components use distinct stable business instruction keys. Their format is an application
+identity contract, not a regulatory code; random keys on each attempt cannot prevent
+duplicate recognition of the same real-world instruction.
+
+### PostgreSQL schema and financial history protection
+
+Forward-only `0008` follows `0007` and adds six tables:
+
+| Table | Purpose |
+|---|---|
+| `accounting_ledgers` | Explicit chart binding |
+| `accounting_periods` | Bounded permitted/disallowed intervals and supplied evidence |
+| `accounting_ledger_sources` | Typed, exclusive document attribution and supplied evidence |
+| `accounting_journal_entries` | Immutable header, identity, dates, currency, evidence and expected child counts |
+| `accounting_posting_lines` | Ordered amounts, sides, versioned account references and explicit dimension columns |
+| `accounting_journal_sources` | Ordered many-to-many journal/source memberships |
+
+SQLAlchemy declarative records use the existing `Base`, with explicit conversion to
+domain snapshots. Composite FKs enforce ledger/chart, chart/version, ledger/period,
+entry/version/account and entry/ledger/source relationships. Local analytics has a
+same-version FK plus target-kind validation. The duplicated version/ledger columns
+on child records exist to support these relational guarantees. Unique exact instruction
+keys use `C` collation. GiST period exclusion reuses `btree_gist` from `0007`.
+
+Row CHECK constraints enforce positive finite amounts, sides, text and date/count
+structure. They do **not** enforce balance across rows. Deferred INSERT constraint
+triggers validate completed line/reference counts, both sides, exact NUMERIC totals,
+applicable version, permitted period, account basis/eligibility and local-reference kind
+at commit. They also execute for later child inserts. Header counts are immutable;
+adding even a balanced pair or an additional valid source to an already complete
+journal fails. Forcing constraints immediate cannot disable subsequent validation.
+
+UPDATE/DELETE row triggers and TRUNCATE statement triggers protect all six new tables,
+including conflict-update attempts. There is no partially editable posted journal or
+draft state. Used account-version contents receive additional mutation protection;
+chart-version edits cannot invalidate posted dates or rewrite approved identifying
+metadata. Valid supersession still changes only predecessor applicability and retains
+historical UUIDs and definitions. Function search paths explicitly place `pg_temp`
+last, preventing decoy temporary tables from bypassing validation. These protections
+cover normal database access, not administrators who disable triggers or alter schema.
+
+No property rows or historical migrations are rewritten. Downgrade refuses removal of
+financial audit history. Populated `0007` upgrade and Alembic/ORM agreement are tested;
+tests migrate only uniquely named disposable databases on the isolated local server.
+
+### Transaction, isolation and supersession protocol
+
+Posting acquires the chart row lock first and the period row lock second, then refreshes
+version, period and documentary references, checks duplicate identity, validates the
+complete aggregate, stages all records and commits once. Direct header INSERTs acquire
+the same locks through a trigger. Repositories never flush or commit. Validation,
+staging, commit-time constraints and uniqueness races roll back the entire journal.
+
+`protected_through(version_id)` now returns the maximum posted effective date for that
+version across all ledgers, including staged entries when queried in the same UoW.
+Supersession shares the chart mutex and rejects cutover on or before that date. If
+posting commits first, supersession sees its protection. If supersession commits first,
+posting refreshes applicability and rejects an expired predecessor. Later legitimate
+supersession preserves posted version/account identities without re-resolving codes.
+
+Fresh reads after lock waits require `READ COMMITTED`; the application session factory
+sets this explicitly. Financial header inserts and protected chart mutations reject
+other isolation levels rather than silently trust an older transaction snapshot.
+Read-only inventory projections keep their existing REPEATABLE READ snapshots. Lock
+timeouts, deadlocks and serialization failures retain the whole-command retry contract.
+
+Future closing must lock chart then period, refresh permission and journal history,
+and hold locks through commit. Multiple charts/periods must use sorted UUID order within
+each lock tier. It must deliberately replace the current immutable-period guard and
+extend chart protection to closed-period coverage, including intervals without journal
+entries. No such transition or closed-period protection is claimed in M6.2.
+
+### Remaining policy and scope
+
+Required analytics/catalogs, authorized currency and rounding policy, supporting-package
+sufficiency, instruction-key issuance, extra source-to-journal date relationships and
+any cross-ledger document sharing remain business-owner inputs. The current slice does
+not infer them from account syntax, property classification, source values or geography.
+
+Future off-balance single-entry operations can reference the same ledger/period/chart/
+document foundation with a separate invariant set; balance-only entries are never
+weakened and artificial counterpart accounts are not introduced. Automatic posting,
+memorial orders, financial reports, opening balances, closing/reopening, corrections,
+reversals/red-storno, off-balance operations, depreciation and Flask UI remain excluded.
+
+
+## 24. Milestone 6.3 — primary memorial-order registers
+
+The user approved Phase 0 with adjustments on 2026-11-07. Registers are first-class
+auditable aggregates, while M6.2 JournalEntry/PostingLine remain the canonical posted
+financial amounts. A property operation, financial posting, primary assignment and
+register finalization are distinct explicit commands.
+
+### Reference definitions, identities and coverage
+
+Frozen `MemorialOrderType` records UUID, exact form identifier, variant, revision,
+authority reference, actor, authorization reference and aware registration timestamp.
+The exact form/variant/revision/authority tuple is unique. No official form is seeded,
+no journal infers its type, and a spreadsheet header does not certify applicability.
+
+Frozen `NumberingScope` is the smallest explicit registration-policy reference:
+UUID, ledger UUID, exact namespace, required policy reference and administrative
+evidence. `(ledger_id, namespace)` is unique and scopes are immutable. Accounting
+owners must establish a canonical namespace and its issuance procedure before use;
+the application cannot infer equivalence of differently named namespaces or verify
+the authority of supplied evidence. Scope registration deliberately does not create
+a numbering engine, account allocation policy, or general workflow framework.
+
+`MemorialOrderNumber(scope_id, value)` preserves an externally issued exact number.
+Register UUID and `(scope_id, issued_number)` are independently unique. Form identity,
+revision, scope, accounting period and coverage are distinct. Scope uniqueness does
+not reset with a type revision. No number allocation, sequence reset, calendar
+generation, or one-order-per-type/period rule is introduced.
+
+Frozen `MemorialOrder` owns a tuple of `MemorialOrderMembership` children and its
+status. Header identity includes UUID, type, ledger, accounting period, coverage,
+number, actor/authorization and aware creation timestamp. Coverage is a positive
+half-open date interval contained in one existing same-ledger accounting period;
+it can be a monthly subset of a wider period without redefining the posting calendar.
+Coverage and all identifying metadata are immutable from creation, including OPEN.
+Membership tuple order has no printed-row or legal chronological meaning.
+
+### Assignment and finalization
+
+`CreateMemorialOrder` requires registered ledger/period/type/scope references.
+`AssignJournalEntries` accepts a nonempty tuple of distinct existing posted journal
+UUIDs. All selected entries must match ledger and period and have effective dates
+inside coverage. The complete batch is validated before any child is staged. A
+membership stores only entry UUID, assignment actor, authorization and aware service
+timestamp; there are no duplicate amounts or account definitions in the register.
+
+Each JournalEntry belongs to at most one primary register across OPEN and FINALIZED
+orders. No partial posting-line assignment, secondary inclusion, deletion, reassignment,
+or amount splitting is supported. Journal documentary attribution remains many-to-many;
+different legitimate entries supported by one document remain distinct financial facts.
+
+`FinalizeMemorialOrder` permits only OPEN -> FINALIZED, with at least one member,
+nonblank actor/authorization evidence and an aware service timestamp. Finalization
+records the supplied evidence, freezes membership, and cannot repeat. It neither
+closes a period nor certifies that all its entries have been assigned. A later allowed
+posting may remain unassigned even within finalized coverage. No correction, reopening,
+late-document handling or electronic signature workflow is inferred.
+
+The existing UoW exposes one `memorial_orders` repository handling aggregate and
+simple reference access. It never loads an entire ledger history. Commands commit
+once explicitly and failures roll back the complete operation. Fakes publish private
+snapshots atomically and retain stale-commit rejection across all existing repositories.
+
+### Additive persistence and concurrency
+
+Forward-only `0009` follows `0008` and creates:
+
+| Table | Role |
+|---|---|
+| `accounting_memorial_order_types` | Immutable exact form revisions and supplied authority/evidence |
+| `accounting_memorial_numbering_scopes` | Immutable same-ledger canonical namespace and required policy reference |
+| `accounting_memorial_orders` | Identity, coverage, lifecycle, registration and finalization evidence |
+| `accounting_memorial_order_memberships` | Unique whole-entry primary membership and assignment evidence |
+
+Declarative records share Base and convert to plain frozen domain snapshots. Real
+composite FKs enforce order/period/ledger, order/scope/ledger and membership/entry/ledger
+relationships. A membership INSERT trigger verifies period and effective coverage
+against the existing immutable entry. Exact codes and issued numbers use C collation.
+Row checks enforce text, finite dates/timestamps and status/finalization consistency.
+
+Orders must be inserted OPEN. A lifecycle trigger permits only the narrow nonempty
+OPEN -> FINALIZED update and rejects identity changes or deletion. Types/scopes and
+memberships reject UPDATE/DELETE; every new table rejects TRUNCATE, including CASCADE.
+Protection covers ordinary SQL access, not administrators disabling triggers/schema.
+No cascade deletion, journal rewrite, regulatory seed, source-document remapping or
+existing membership backfill occurs. Downgrade refuses register audit-history removal.
+
+Assignment and finalization serialize through the same parent-order row lock held
+until commit. SQL repository retrieval refreshes header/children in subsequent reads
+after waiting. Direct INSERTs acquire that parent lock in a trigger and use a separate
+state read; direct finalization UPDATEs acquire the same row lock. Register writes
+require READ COMMITTED, reusing the M6.2 financial isolation requirement. With
+assignment first, finalization includes the committed members; with finalization
+first, assignment rejects the refreshed status. Unique entry membership also handles
+assignments racing across different orders; UUID/scoped-number constraints handle
+identity races. Lock timeout/deadlock/serialization failures require whole-command retry.
+
+Membership operations reference immutable journals without changing their chart/period
+locking protocol. Posting and supersession still coordinate chart first, then period
+where required. Register finalization introduces no closed-period coverage protection.
+Tests verify populated 0008 row/trigger preservation and Alembic/ORM agreement using
+uniquely named disposable databases on the existing isolated local test server.
+
+### Read projections and correspondence boundary
+
+`GetMemorialOrderTotals` returns status, member count, debit and credit turnover per
+currency, and amounts per original account UUID/version, currency and side, including
+historical code/name. Core SQL aggregates canonical posting lines without joining
+documentary memberships. It never adds debit and credit into one turnover figure,
+quantizes currency, converts FX or depends on ambient Decimal precision. Empty orders
+have zero members and no amount groups, rather than inventing a currency.
+
+`GetJournalRegisterEntries` requires ledger and explicit UNASSIGNED/OPEN/FINALIZED
+state, with optional accounting period. All three populations remain visible. DTOs
+identify entries, effective dates, instruction keys, currency and assigned order;
+they do not invent automatic eligibility/type classification. Reader calls use their
+own REPEATABLE READ, READ ONLY transaction, without UoW commit/autoflush. Multiple
+SELECTs see one snapshot. These are current-query snapshots, not a bitemporal model.
+
+Whole-entry membership is distinct from displayed correspondence rows. The reference
+workbook demonstrates a monthly presentation, document-based rows, paired-account
+summary, turnover and signature sections, but is not a verified current statutory
+template. Its older authority header is not seeded as an applicable revision. Only
+synthetic multi-document fixtures with three supplied correspondences are used; no
+real workbook or identifying contents enter this repository.
+
+M6.2 permits multiline debit/credit entries without arbitrary debit-credit pairing.
+No pairing is inferred from ordering and no amounts are allocated to match the form.
+Reports expose `correspondence_rendering_unsupported`; requests for correspondence
+rows raise `UnsupportedCorrespondenceRendering`. Form rendering and its exact turnover,
+pairing, grouping and signature rules remain subject to approved presentation policy.
+
+### Remaining policy and exclusions
+
+Production inputs still require approved applicable form/authority revisions,
+entry-to-type allocation, canonical numbering namespaces and issuance procedures,
+supporting-package sufficiency, legal finalization/signature authority, late-document
+and correction rules, and rendering semantics. Nonblank references record supplied
+evidence without certifying statutory compliance, signatures, RBAC or policy validity.
+
+No automatic posting, correspondence generation, Excel/PDF rendering, opening/trial
+balances, Journal-General, closing/reopening, corrections/reversals, depreciation,
+Flask UI or generic document/workflow engine is included.

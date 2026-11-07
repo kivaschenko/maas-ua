@@ -13,7 +13,11 @@ from typing import Self
 from uuid import UUID
 
 from maas_ua.adapters.accounting_memory import FakeChartRepository
+from maas_ua.adapters.journal_memory import FakeAccountingLedgerRepository, FakeJournalEntryRepository
+from maas_ua.adapters.memorial_memory import FakeMemorialOrderRepository
 from maas_ua.domain.accounting import ChartOfAccounts, ChartSupersession, ChartVersion
+from maas_ua.domain.journal import AccountingLedger, AccountingPeriod, JournalEntry, LedgerSourceReference
+from maas_ua.domain.memorial_orders import MemorialOrder, MemorialOrderType, NumberingScope
 from maas_ua.domain.movements import DuplicateMovement, MovementDocument
 from maas_ua.domain.receipts import (
     AssetUnit,
@@ -36,6 +40,13 @@ class _State:
     charts: Mapping[UUID, ChartOfAccounts] = field(default_factory=dict)
     chart_versions: Mapping[UUID, ChartVersion] = field(default_factory=dict)
     chart_supersessions: Mapping[UUID, ChartSupersession] = field(default_factory=dict)
+    ledgers: Mapping[UUID, AccountingLedger] = field(default_factory=dict)
+    periods: Mapping[UUID, AccountingPeriod] = field(default_factory=dict)
+    ledger_sources: Mapping[UUID, LedgerSourceReference] = field(default_factory=dict)
+    journals: Mapping[UUID, JournalEntry] = field(default_factory=dict)
+    memorial_types: Mapping[UUID, MemorialOrderType] = field(default_factory=dict)
+    numbering_scopes: Mapping[UUID, NumberingScope] = field(default_factory=dict)
+    memorial_orders: Mapping[UUID, MemorialOrder] = field(default_factory=dict)
 
 
 class FakeStore:
@@ -204,8 +215,18 @@ class FakeUnitOfWork:
         if self._active:
             raise RuntimeError("unit of work is already active")
         self._snapshot = self.store._state
+        self.memorial_orders = FakeMemorialOrderRepository(
+            self._snapshot.memorial_types, self._snapshot.numbering_scopes, self._snapshot.memorial_orders
+        )
+        self.journals = FakeJournalEntryRepository(self._snapshot.journals)
+        self.ledgers = FakeAccountingLedgerRepository(
+            self._snapshot.ledgers, self._snapshot.periods, self._snapshot.ledger_sources
+        )
         self.charts = FakeChartRepository(
-            self._snapshot.charts, self._snapshot.chart_versions, self._snapshot.chart_supersessions
+            self._snapshot.charts,
+            self._snapshot.chart_versions,
+            self._snapshot.chart_supersessions,
+            self.journals._items,
         )
         self.nomenclatures = FakeNomenclatureRepository(self._snapshot.nomenclatures)
         self.receipts = FakeReceiptRepository(self._snapshot.receipts)
@@ -247,6 +268,13 @@ class FakeUnitOfWork:
             MappingProxyType(dict(self.charts._charts)),
             MappingProxyType(dict(self.charts._versions)),
             MappingProxyType(dict(self.charts._supersessions)),
+            MappingProxyType(dict(self.ledgers._ledgers)),
+            MappingProxyType(dict(self.ledgers._periods)),
+            MappingProxyType(dict(self.ledgers._sources)),
+            MappingProxyType(dict(self.journals._items)),
+            MappingProxyType(dict(self.memorial_orders._types)),
+            MappingProxyType(dict(self.memorial_orders._scopes)),
+            MappingProxyType(dict(self.memorial_orders._orders)),
         )
         self.store._state = state
         self._committed = True
@@ -255,8 +283,18 @@ class FakeUnitOfWork:
     def rollback(self) -> None:
         if not self._active:
             raise RuntimeError("rollback requires an active unit of work")
+        self.memorial_orders = FakeMemorialOrderRepository(
+            self.store._state.memorial_types, self.store._state.numbering_scopes, self.store._state.memorial_orders
+        )
+        self.journals = FakeJournalEntryRepository(self.store._state.journals)
+        self.ledgers = FakeAccountingLedgerRepository(
+            self.store._state.ledgers, self.store._state.periods, self.store._state.ledger_sources
+        )
         self.charts = FakeChartRepository(
-            self.store._state.charts, self.store._state.chart_versions, self.store._state.chart_supersessions
+            self.store._state.charts,
+            self.store._state.chart_versions,
+            self.store._state.chart_supersessions,
+            self.journals._items,
         )
         self.nomenclatures = FakeNomenclatureRepository(self.store.nomenclatures)
         self.receipts = FakeReceiptRepository(self.store.receipts)
