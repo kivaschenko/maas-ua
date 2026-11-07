@@ -619,3 +619,163 @@ act is required. Full approval workflows, document attachments, role enforcement
 operational launch tracking, fixed-asset disposal/depreciation, salvage receipts,
 automatic postings, reversals/corrections, legacy onboarding, closed periods and Flask UI
 remain outside M5A.
+
+
+## 22. Milestone 6.1 — accounting reference data and version management
+
+Scope and architectural decisions approved by the user on 2026-11-06. This is the
+Financial Accounting Ledger's reference foundation, alongside the existing Property
+Ledger. No financial posting behavior, period closing, memorial orders or reports are
+implemented. M1–M5A identity, receipt, custody, write-off and valuation semantics remain.
+
+### Chart and version boundaries
+
+`ChartOfAccounts(id, accounting_entity_ref)` identifies one explicitly selected chart
+for an opaque accounting entity. Several chart identities may name the same entity;
+resolution always requires the chart UUID, not an assumed global current chart.
+
+`ChartVersion` is the immutable aggregate snapshot: UUID, chart UUID, exact label,
+`valid_from`, nullable `valid_to`, approval reference, aware `created_at`, and a nonempty
+ordered tuple of `AccountDefinition` values. Labels and codes compare case-sensitively
+without normalization. UUIDs identify historical snapshots, not account codes.
+
+Applicability is `[valid_from, valid_to)`: start inclusive, end exclusive, NULL unbounded.
+Finite ends must follow starts. No overlapping versions within a chart are permitted,
+including concurrent registration. Different charts may have independent intervals.
+An as-of lookup returns one version or `None`; ambiguity is an explicit conflict.
+Account validity derives exclusively from its version. No account-specific date fields
+or automatic expiration rules exist. Disjoint ordinary registrations may have gaps;
+no approved general gap prohibition has been supplied.
+
+### Account definitions and local extensions
+
+Each definition has a globally unique immutable UUID, exact code, name, explicit
+`AccountKind` (`OFFICIAL` or `LOCAL_ANALYTICAL`), balance basis (`BALANCE` or
+`OFF_BALANCE`), boolean posting eligibility, authority reference, optional parent UUID,
+and an explicit official-account UUID for local definitions only. Approved names and
+references are supplied by the caller; this application does not certify their authority
+or seed a guessed chart. Posting eligibility does not derive from code syntax or children.
+
+Parents and official mappings must resolve inside the same version. Parent and child
+balance basis must agree; official definitions cannot descend from local definitions.
+A local mapping must target an official definition of the same basis. Where a local
+parent exists, it must identify that official account directly or share its explicit
+mapping. No code-prefix/slash/suffix interpretation is used. For example, `1518/03.01`
+is stored verbatim; the meaning of `03.01` remains an approved local-policy input.
+All definitions are checked together for duplicate codes/UUIDs, missing targets, invalid
+mapping relationships and cycles before persistence. Deep hierarchies use iterative
+validation. No arbitrary chart completeness, code length or leaf-only posting rule is added.
+
+A new version uses new definition UUIDs, even for reused codes. Old UUIDs and their
+original fields remain retrievable. There are no account update/delete methods or
+in-place approved-content corrections. This matches the supported-API immutability
+boundary of the property domain; unrestricted administrative SQL is not prevented.
+
+### Narrow, audited supersession
+
+`SupersedeChartVersion` supplies a retry-stable transition UUID, predecessor UUID,
+complete approved successor snapshot, actor reference and reason. The service opens
+one UoW, checks transition identity, locks the affected chart, checks identity again,
+refreshes the predecessor and reads future-use protection. The domain requires:
+
+- A distinct successor UUID/label in the same chart.
+- An open-ended predecessor and strictly later successor start.
+- New definition identities, preserving the old identities in history.
+- No conflict with other approved intervals, labels or identities.
+- A successor start strictly after any protected-through date.
+
+The returned immutable result closes only predecessor applicability at the successor's
+start. Approved definitions, codes, hierarchy, mappings, approval reference, timestamp
+and original start remain unchanged. The cutover has neither overlap nor gap. The
+successor may have its own explicitly approved finite or open end. A closed predecessor
+cannot be shortened again. A successor can subsequently be superseded through the same
+operation. Unrelated retrospective replacements and general applicability editing are
+unsupported.
+
+`ChartSupersession` persists transition UUID, chart/predecessor/successor UUIDs, exact
+cutover date, actor, reason and aware service registration timestamp. Successor approval
+is preserved on its version. Duplicate transition UUIDs are rejected rather than silently
+replayed. Closing the predecessor, inserting the successor and all definitions, and
+inserting audit evidence happen in one transaction with one explicit commit. Validation,
+staging or commit failure rolls back every change.
+
+The repository exposes `protected_through(version_id)` as a narrowly scoped future
+integration point. It returns `None` now: there are no journal entries or financial
+periods to protect. Pure domain and fake-service tests exercise refusal at a protected
+posting/closed-period boundary. Before those financial records exist, the production
+repository must query their latest protected date, and their writing/closing commands
+must coordinate with the same chart lock. This is an explicit integration obligation,
+not a claim that M6.1 validates nonexistent posted records.
+
+### Typed dimensions
+
+Frozen `AccountingDimensions` has optional fields `fund`, `budget_program_code`, `kekv`,
+`funding_source`, `reporting_unit`, `counterparty`, and `local_accounting_analytics`.
+The first six use distinct frozen text-reference types: `FundRef`, `BudgetProgramCode`,
+`KEKVCode`, `FundingSourceRef`, `ReportingUnitRef`, `CounterpartyRef`. Wrong types,
+blank values and outer whitespace are rejected without silently rewriting supplied
+values. Validating reference structure does not validate a regulatory catalog or invent
+required combinations.
+
+Local analytics is an explicit account-definition UUID. Domain validation checks that
+it identifies a `LOCAL_ANALYTICAL` definition in the selected snapshot. The service
+`validate_accounting_dimensions` first retrieves the registered version through the UoW,
+so an unregistered or cross-version reference is rejected. No dimension persistence
+aggregate/table is introduced before an owning financial record exists. There is no EAV
+model, property-to-financial analytics mapping, or implicit conversion of receipt
+analytics, serials, custody or acquisition provenance into financial dimensions.
+
+### Persistence, constraints and migration
+
+The domain imports no ORM or web dependencies. `adapters/accounting_orm.py` uses the
+existing declarative `Base` and explicit conversions; the chart repository accesses
+complete version aggregates. The existing fake and SQL UoWs expose `charts`, retaining
+all property repositories and explicit commit/rollback behavior.
+
+Forward-only `0007` follows `0006` and creates four tables:
+
+| Table | Persisted fields |
+|---|---|
+| `accounting_charts` | UUID PK, exact accounting entity reference |
+| `accounting_chart_versions` | UUID PK, chart FK, exact label, start/end, approval reference, aware creation timestamp |
+| `accounting_account_definitions` | UUID PK, version FK, ordered position, exact code/name, kind/basis, posting boolean, authority reference, parent/official UUIDs |
+| `accounting_chart_supersessions` | UUID PK, same-chart predecessor/successor FKs, effective date, actor/reason, aware timestamp |
+
+PostgreSQL `C` collation and `(version_id, code)` uniqueness preserve exact codes;
+`(chart_id, label)` is unique. Account UUIDs are globally unique. Composite, deferred
+parent/mapping FKs require the same version and allow arbitrary input tuple order.
+The database enforces required local mappings, permitted kinds/bases, nonempty text,
+validity and nonnegative unique line positions; domain checks cover cycles and
+cross-row kind/basis consistency. Audit FKs require both versions to belong to the
+same chart; predecessor and successor can each participate in only one such transition
+role. No cascading deletes or general update methods are provided.
+
+`btree_gist` supplies UUID equality for an immediate GiST exclusion constraint combining
+chart identity and `daterange(valid_from, valid_to, '[)')`. This rejects overlap even
+when competing callers bypass service locks/prechecks. The migration uses
+`CREATE EXTENSION IF NOT EXISTS`; deployment needs that permission or prior extension
+provisioning. No accounts, dimensions or policy values are seeded. No property table or
+migration `0001`–`0006` is rewritten. Downgrade refuses to erase approved definitions or
+audit history. Tests migrate only uniquely named disposable databases.
+
+Registration/supersession use a chart row lock and refreshed subsequent reads. The SQL
+repository performs only the narrow predecessor-end UPDATE before staging successor
+INSERTs, preventing temporary exclusion conflicts; it never flushes or commits. Domain
+validation is complete before that write. PK/unique/exclusion races become
+`ChartVersionConflict`; lock timeouts/deadlocks/serialization failures retain the
+`RepositoryConflict` whole-command retry contract. Fakes retain atomic private snapshots
+and reject stale shared-store commits.
+
+### Future accounting behavior and remaining policy inputs
+
+Balance-account postings will require approved exact debit/credit equality; applicable
+off-balance operations may require single-entry treatment. Account basis and posting
+eligibility remain separate metadata so neither behavior is precluded. Neither posting
+mechanism is implemented here.
+
+Selected entities, verified official definitions/names, approved local mappings and suffix
+meanings, dimension requirements/code lists, opening balances, financial correspondence,
+posting/correction rules, periods and memorial registers remain business-owner inputs.
+No regulatory compliance or authorization/signature verification is inferred from a
+nonblank approval reference. M6.1 supplies no JournalEntry, PostingLine, MemorialOrder,
+automatic accounting, financial reports, closing, reversals, or Flask UI.

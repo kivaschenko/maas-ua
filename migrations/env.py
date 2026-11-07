@@ -6,7 +6,7 @@ from alembic import context
 from sqlalchemy import create_engine, pool
 from sqlalchemy.engine import make_url
 
-from maas_ua.adapters.orm import Base
+from maas_ua.adapters.accounting_orm import Base
 
 config = context.config
 target_metadata = Base.metadata
@@ -35,9 +35,7 @@ def run_migrations_offline():
 
 
 def run_migrations_online():
-    engine = create_engine(
-        database_url(), poolclass=pool.NullPool, hide_parameters=True
-    )
+    engine = create_engine(database_url(), poolclass=pool.NullPool, hide_parameters=True)
     try:
         with engine.connect() as connection:
             context.configure(connection=connection, target_metadata=target_metadata)
