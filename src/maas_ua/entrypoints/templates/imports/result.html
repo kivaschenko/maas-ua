@@ -1,0 +1,29 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>{{ {'registered':'Receipt registered','already_registered':'Already registered','rejected':'Receipt rejected','retryable':'Registration requires verification'}[result.status] }}</h1>
+{% if result.status == 'already_registered' %}<p>The complete original receipt facts match an existing registration. No additional assets were created.</p>{% endif %}
+{% if result.receipt_id %}<p>Receipt UUID: <strong>{{ result.receipt_id }}</strong><br>Serialized assets: {{ result.asset_count }}</p>{% endif %}
+{% if result.status == 'retryable' %}
+<p>The outcome could not be verified. Retry the same preview to check its registration identity before any new write.</p>
+<p><a href="{{ url_for('imports.preview',preview_id=preview_id) }}">Return to preview and retry</a></p>
+{% else %}{% with issues=result.issues %}{% include 'imports/issues.html' %}{% endwith %}{% endif %}
+{% if receipt %}{% set doc=receipt.receipt %}{% set line=doc.lines[0] %}
+<h2>Registered document</h2>
+<dl>
+  <dt>Document / dates</dt><dd>{{ doc.document_number }} · {{ doc.document_date }} · effective {{ doc.effective_date }}</dd>
+  <dt>Source / nomenclature</dt><dd>{{ doc.source }} / {{ line.nomenclature.code }}</dd>
+  <dt>Quantity / acquisition total</dt><dd>{{ line.quantity.count }} {{ line.quantity.unit }} / {{ line.total.amount }} {{ line.total.currency }}</dd>
+</dl>
+<div class="scroll"><table>
+  <thead><tr><th>Asset UUID</th><th>Namespace</th><th>Serial value</th></tr></thead>
+  <tbody>{% for unit in receipt.units %}<tr><td>{{ unit.id }}</td><td>{{ unit.serial_number.namespace }}</td><td>{{ unit.serial_number.value }}</td></tr>{% endfor %}</tbody>
+</table></div>
+{% endif %}
+{% if result.status != 'retryable' %}
+<form action="{{ url_for('imports.discard',preview_id=preview_id) }}" method="post">
+  <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+  <button type="submit">Close result and release preview</button>
+</form>
+{% endif %}
+<p><a href="{{ url_for('imports.new') }}">Upload another receipt</a></p>
+{% endblock %}

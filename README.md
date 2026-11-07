@@ -4,7 +4,7 @@
 
 MAAS-UA is a Python application for traceable accounting of military property, initially focused on individually identified FPV drones and reusable unmanned aircraft systems (БпАК), with the longer-term goal of reconciling property registers and financial accounting.
 
-> **Status (2026-11-07):** M1–M5A, M6.1 accounting references, M6.2 manually authorized balanced financial journals, and M6.3 primary memorial-order registers are implemented. Property operations, financial posting, and register assignment remain explicit separate Python use cases; no Flask reporting endpoints or operational UI are implemented.
+> **Status (2026-11-07):** M1–M5A, M6.1–M6.3, and M7.1 local Flask serialized-inventory receipt import are implemented. XLSX/CSV uploads require preview and explicit confirmation through the existing receipt command. Property operations, financial posting, and memorial register assignment remain separate. Production access and broader reporting UI are not implemented.
 >
 > **Data handling:** Use synthetic records in code, fixtures, prompts, CI, documentation, logs, and public discussions. Do not publish real military inventory, serial numbers, unit identities, custody/location data, accounting documents, or operational details. Follow applicable authorization and data-handling requirements.
 
@@ -30,18 +30,19 @@ The system distinguishes property/custody accounting from financial accounting. 
 | Manually authorized immutable balanced financial journals | Implemented (M6.2) |
 | Primary memorial registers, membership, finalization and canonical turnover queries | Implemented (M6.3) |
 | Fixed-asset amortization, automated postings, reconciliation | Planned |
-| Flask UI, Excel import/export integration and user-facing reports | Planned integration (M7+); verify any pre-existing scripts separately |
+| Local Flask XLSX/CSV serialized-inventory receipt import | Implemented (M7.1); preview, confirmation, original-fact duplicate recognition |
+| Other import types, exports and user-facing reports | Planned (M7+) |
 
 Implemented milestones do **not** imply production authorization, legal accounting compliance, or a complete financial ledger.
 
 ## Stack
 
 - Python, managed by **uv** (`pyproject.toml`, `uv.lock`)
-- Flask for future HTTP/web entry points
+- Flask and Jinja2 for local-development receipt import
 - SQLAlchemy 2.x, PostgreSQL, and Alembic for persistence
 - pytest: unit, service-layer, and PostgreSQL integration tests
 - Ruff for lint/format checks
-- Excel processing via openpyxl / pandas when integration work starts
+- XLSX via openpyxl + defusedxml; CSV via the Python standard library
 - VS Code with the Codex extension for local development
 
 Development typically runs Python locally and PostgreSQL in Docker. Refer to the repository's existing Compose/env setup rather than creating a second one.
@@ -106,7 +107,8 @@ A homogeneous receipt line of 27 FPV drones has 27 `AssetUnit` records, each poi
 - **M6.2 — Implemented:** explicit ledgers, permitted periods, document attribution, and manually authorized immutable balanced journals.
 - **M6.3 — Implemented:** explicitly identified memorial registers, unique whole-entry primary membership, finalization, and turnover/assignment queries.
 - **M6.4+ — Proposed:** form rendering, broader financial reports, automated postings and approved closing/correction rules.
-- **M7 — Proposed:** Flask web workflows, Excel import/export, reports and regression tests.
+- **M7.1 — Implemented:** local single-process Flask receipt uploads, versioned two-sheet XLSX / flat CSV, typed validation, preview, explicit atomic confirmation, results and safe retries.
+- **M7+ — Proposed:** other import types, exports, broader reports and approved production access.
 
 The roadmap is a planning tool, not an assertion of final approved accounting functionality.
 
@@ -419,6 +421,51 @@ and signature requirements. No Excel/PDF export, automatic allocation/posting,
 partial/secondary membership, removal/reassignment, reopening, period closing,
 corrections, trial balance, Journal-General, depreciation or Flask UI is added.
 
+## M7.1: Local receipt imports
+
+Use an explicitly configured, already provisioned development `DATABASE_URL` at
+migration head. Startup never migrates or seeds data. Run one local process:
+
+```bash
+uv run flask --app maas_ua.entrypoints.flask_app:create_app --no-debug run --host 127.0.0.1 --no-reload --no-debugger
+```
+
+Open <http://127.0.0.1:5000/imports/new>, explicitly select the serialized receipt
+import type, and download its template. XLSX uses `Document` field/value rows and
+`SerialNumbers` asset rows; CSV repeats document/line metadata per asset. One upload
+must describe one complete homogeneous serialized **INVENTORY** line. Catalog
+nomenclature must already exist with `SERIALIZED` tracking and `pcs`; complete
+initial custody is required. All errors block the whole document.
+
+Money is exact Decimal: numeric XLSX cells are read from original XML decimal tokens
+with at most 15 significant digits, text money allows 38, and decimal exponents are
+bounded to 100. No rounding or currency-specific quantization is applied. Formulas
+are rejected. Identifier cells must be text; case, Unicode and leading zeros remain
+exact. Source/custody references and receipt analytics are opaque, without financial
+dimension mapping or automatic catalog creation.
+
+Preview writes no property facts. Confirmation rechecks PostgreSQL and calls
+`register_inventory_receipt()` with one UoW/commit. The application creates technical
+UUIDs; accountants never enter them. A retained preview has a stable registration
+UUID for uncertain-response recovery. Re-upload recognition compares the entire
+original receipt and serial set, including initial custody, even after transfers or
+write-offs. Matching originals return their existing receipt; conflicts never
+overwrite documents. Database serial uniqueness remains authoritative under races.
+Document numbers remain nonunique. A new upload with disjoint serial identities can
+be a new receipt even when its paper number repeats; no paper-document identity or
+permanent import history is claimed.
+
+Private in-memory previews expire after 30 minutes or application restart, with
+session ownership, CSRF protection and capacity limits. Close completed results or
+discard previews to release capacity. Raw uploads are not retained. The interface
+rejects nonlocal clients, untrusted hosts, debug mode and multiprocess WSGI requests.
+**Do not deploy it with multiple workers or use it for production data.** Production
+requires approved authentication, authorization, handling and staging controls.
+No staging table, migration, automatic journal, or memorial generation was added.
+
+See [the full import contract and synthetic walkthrough](docs/development/receipt-imports.md)
+and [the domain decision](docs/architecture/domain-model.md#25-milestone-71--local-serialized-inventory-receipt-import).
+
 ## Testing strategy
 
 ```text
@@ -434,6 +481,7 @@ Fast tests need no PostgreSQL:
 
 ```bash
 uv run pytest tests/unit tests/service_layer
+uv run pytest tests/e2e
 uv run ruff check .
 ```
 

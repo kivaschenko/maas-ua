@@ -1,0 +1,18 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Import a serialized inventory receipt</h1>
+<p>Upload one complete document with one homogeneous line. Review the validation results before confirming registration.</p>
+<p>Download a versioned <a href="{{ url_for('imports.template',file_type='xlsx') }}">XLSX template</a> or
+<a href="{{ url_for('imports.template',file_type='csv') }}">CSV header template</a>.</p>
+<form action="{{ url_for('imports.upload') }}" method="post" enctype="multipart/form-data">
+  <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+  <label>Import type <select name="import_type" required><option value="">Select a type</option><option value="{{ import_type }}">Serialized inventory receipt · v1</option></select></label>
+  <label>File <input type="file" name="file" accept=".xlsx,.csv" required></label>
+  <label>CSV delimiter <select name="delimiter"><option value=",">Comma</option><option value=";">Semicolon</option></select></label>
+  <button class="primary" type="submit">Upload and validate</button>
+</form>
+<h2>File requirements</h2>
+<p>XLSX uses Document (field/value pairs) and SerialNumbers (one namespace/value pair per row). CSV repeats document facts on each row.</p>
+<p>Use exact text for identifiers, including leading zeros. Dates use YYYY-MM-DD or native Excel dates. Money uses a dot decimal separator. Numeric Excel money supports 15 significant digits; decimal text supports 38. No rounding is applied. Formulas are unsupported.</p>
+<p class="muted">Maximum 5 MiB and 1,000 units. Initial location and responsible party are required. Previews expire after 30 minutes and after application restarts. Uploaded files are discarded after parsing.</p>
+{% endblock %}

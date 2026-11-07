@@ -1,0 +1,12 @@
+{% if issues %}
+<div class="errors" role="alert">
+  <p>The complete document has been rejected. Correct the file and upload it again.</p>
+  <div class="scroll"><table>
+    <thead><tr><th>Sheet</th><th>Row</th><th>Column</th><th>Field</th><th>Code</th><th>Message</th></tr></thead>
+    <tbody>{% for issue in issues %}<tr>
+      <td>{{ issue.cell.sheet if issue.cell else 'Document' }}</td><td>{{ issue.cell.row if issue.cell else '—' }}</td>
+      <td>{{ issue.cell.column if issue.cell else '—' }}</td><td>{{ issue.field }}</td><td>{{ issue.code }}</td><td>{{ issue.message }}</td>
+    </tr>{% endfor %}</tbody>
+  </table></div>
+</div>
+{% endif %}

@@ -1,0 +1,7 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Request could not be completed</h1>
+<p role="alert">{{ message }}</p>
+{% if result_url %}<p><a href="{{ result_url }}">View import result</a></p>{% endif %}
+<p><a href="{{ url_for('imports.new') }}">Return to upload</a></p>
+{% endblock %}

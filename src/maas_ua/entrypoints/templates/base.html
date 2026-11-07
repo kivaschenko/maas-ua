@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{% block title %}MAAS-UA receipt import{% endblock %}</title>
+  <style>
+    body { font: 16px/1.5 system-ui,sans-serif; color: #162b3b; background: #f6f8fa; margin: 0; }
+    main { max-width: 1100px; margin: 2rem auto; padding: 1.5rem; background: white; border: 1px solid #d8e1e8; border-radius: .5rem; }
+    h1,h2 { line-height: 1.2; } a { color: #125b93; } label { display: block; margin: 1rem 0; }
+    input,select,button { font: inherit; padding: .5rem; } button { cursor: pointer; }
+    button.primary { background: #155d53; color: white; border: 0; border-radius: .25rem; }
+    table { border-collapse: collapse; width: 100%; margin: 1rem 0; } th,td { text-align: left; border: 1px solid #d8e1e8; padding: .45rem; overflow-wrap: anywhere; }
+    .notice { padding: .8rem; border-left: 4px solid #b37b16; background: #fff7df; }
+    .errors { border-left: 4px solid #b32828; padding: .8rem; background: #fff3f3; }
+    .scroll { overflow-x: auto; } .muted { color: #526776; } dt { font-weight: 600; } dd { margin: 0 0 .6rem; overflow-wrap: anywhere; }
+    form.inline { display: inline-block; margin-right: 1rem; }
+  </style>
+</head>
+<body><main>
+  <p><a href="{{ url_for('imports.new') }}">MAAS-UA · Receipt imports</a></p>
+  <p class="notice">Local development only. Use synthetic data. Production access requires approved authentication and authorization.</p>
+  {% block content %}{% endblock %}
+</main></body>
+</html>
