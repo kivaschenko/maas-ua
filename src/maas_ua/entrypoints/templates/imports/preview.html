@@ -1,0 +1,33 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Receipt preview</h1>
+<p>No property registration has been performed by this preview. Confirmation checks the current database state again.</p>
+{% with issues=preview.issues %}{% include 'imports/issues.html' %}{% endwith %}
+{% if preview.candidate %}{% set c=preview.candidate %}
+<dl>
+  <dt>Document</dt><dd>{{ c.document_number }}</dd>
+  <dt>Document date / effective date</dt><dd>{{ c.document_date }} / {{ c.effective_date }}</dd>
+  <dt>Nomenclature / classification</dt><dd>{{ c.nomenclature_code }} / {{ c.classification }}</dd>
+  <dt>Source</dt><dd>{{ c.source }}</dd>
+  <dt>Quantity / parsed units</dt><dd>{{ c.quantity }} pcs / {{ c.serials|length }}</dd>
+  <dt>Unit price / line total</dt><dd>{{ c.unit_price }} / {{ c.line_total }} {{ c.currency }}</dd>
+  <dt>Initial custody</dt><dd>{{ c.location_ref }} / {{ c.responsible_party_ref }}</dd>
+  <dt>Receipt analytics</dt><dd>{% for key,value in c.analytics %}{{ key }}: {{ value }}{% if not loop.last %}; {% endif %}{% else %}None supplied{% endfor %}</dd>
+</dl>
+<div class="scroll"><table>
+  <thead><tr><th>Sheet / row</th><th>Namespace</th><th>Serial value</th></tr></thead>
+  <tbody>{% for row in c.serials %}<tr><td>{{ row.cell.sheet }} / {{ row.cell.row }}</td><td>{{ row.namespace }}</td><td>{{ row.value }}</td></tr>{% endfor %}</tbody>
+</table></div>
+{% endif %}
+{% if preview.ready %}
+<form class="inline" action="{{ url_for('imports.confirm',preview_id=preview.id) }}" method="post">
+  <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+  <button class="primary" type="submit">Confirm registration</button>
+</form>
+{% endif %}
+{% if preview.state == 'confirming' %}<p>Confirmation is in progress. Reload this page to retrieve its result.</p>{% endif %}
+<form class="inline" action="{{ url_for('imports.discard',preview_id=preview.id) }}" method="post">
+  <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+  <button type="submit">Discard preview</button>
+</form>
+{% endblock %}

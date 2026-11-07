@@ -1100,3 +1100,68 @@ evidence without certifying statutory compliance, signatures, RBAC or policy val
 No automatic posting, correspondence generation, Excel/PDF rendering, opening/trial
 balances, Journal-General, closing/reopening, corrections/reversals, depreciation,
 Flask UI or generic document/workflow engine is included.
+
+
+## 25. Milestone 7.1 — local serialized-inventory receipt import
+
+The Phase 0 review approved implementation on 2026-11-07 with separate XLSX/CSV
+layouts, exact native Excel numeric money support, application-managed technical
+identities, required initial custody, and bounded single-process memory staging.
+
+Flask/Jinja entrypoints parse and preview one complete receipt document with one
+homogeneous serialized **INVENTORY** line. XLSX `Document` field/value rows and
+`SerialNumbers` asset rows use exact `serialized_receipt_v1`; flat CSV repeats the
+same metadata for every unit and requires one line grouping marker. Both map to the
+same frozen candidate, shared validator and existing `RegisterInventoryReceipt`.
+Unsupported multiple lines/worksheets, formulas, missing/ambiguous values or any
+invalid row reject the whole document. No existing command or domain invariant is
+weakened. Other callers may still use unknown initial custody/classification where
+the existing command permits it; this import requires both custody references and
+explicit INVENTORY. Catalog records must already exist, with SERIALIZED tracking/pcs.
+
+Exact namespace/value serial identity remains case-sensitive without normalization.
+References, leading zeros and Unicode remain text. Quantity must equal serial count;
+line total equals exact quantity times price/currency. Numeric XLSX money is parsed
+from original XML decimal tokens, never Decimal(binary_float). Numeric money allows
+15 significant decimal digits, text allows 38; decimal/adjusted exponents are bounded
+to 100. No rounding/quantization occurs. These bounded import representations do not
+change the domain's finite nonnegative Decimal/NUMERIC policy, including zero.
+Dates remain explicit document/effective facts plus a separate aware service timestamp.
+Source/custody references and receipt analytics remain opaque; no regulatory catalogs,
+mandatory financial dimensions or receipt-to-financial mapping are inferred.
+
+Preview writes no property/financial facts. A read adapter uses its own REPEATABLE
+READ, READ ONLY snapshot for catalog, serial and original receipt checks. Confirmation
+reads fresh facts and invokes the existing receipt service with one fresh UoW and one
+explicit commit. Original provenance, serials, initial custody and existing audit
+history remain unchanged. There is no SQL insert/UPSERT path in the importer.
+
+The app issues a temporary preview UUID and separate registration UUID. The latter
+is retained as the receipt UUID through repeated attempts of that preview using the
+existing UUID factory hook. No accountant supplies UUIDs. Original-fact matching
+requires the whole document/line, complete exact serial set and initial custody;
+mutable custody/lifecycle and generated IDs/timestamps are excluded. It reports an
+existing matching registration even after transfers/write-offs. Different original
+facts under that registration UUID or any conflicting serial reject the whole receipt.
+Concurrent same-preview confirmation is claimed in memory; consumed previews reject
+another command. Separate uploads rely on PostgreSQL identity/serial constraints and
+fresh reconciliation after rollback. An uncertain commit is reconciled by registration
+UUID and original facts; if unavailable, retry retains the same technical identity.
+
+There is no durable upload identity, import history or paper-document deduplication
+policy. Across restart, re-upload recognition requires complete matching stored
+original facts and serials; database serial conflicts remain authoritative otherwise.
+Document numbers remain nonunique. Different/disjoint serial identities with a repeated
+paper number can still register a distinct receipt. No broader idempotency is claimed.
+
+Private in-memory previews/results expire after 30 minutes or restart, are session-bound
+and CSRF-protected, and have file/ZIP/XML/row/cell/staging capacity limits. Raw files
+are not retained. Values are HTML-escaped and omitted from logs; client cookies contain
+only random session/CSRF tokens. The app rejects nonlocal clients, debug and multiprocess
+requests. No production use or multiworker deployment is supported before approved
+authentication, authorization, retention and data-handling controls. No database changes,
+historical migrations/backfills, financial postings, memorial generation, CRUD screens,
+document editing or asynchronous import infrastructure were added.
+
+The detailed file contract, precision limits, retry boundaries, local startup and a
+synthetic 27-unit example are in [the import guide](../development/receipt-imports.md).
