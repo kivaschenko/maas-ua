@@ -66,6 +66,17 @@ def test_upload_preview_confirm_and_retrieve_27_units(app, kind, make_file):
         assert set(session) == {"csrf_token", "import_session"}
 
 
+def test_upload_accepts_valid_csv_larger_than_form_memory_limit(app):
+    client = app.test_client()
+    fields = document_fields(line_quantity="60", line_total="870000.00")
+    data = csv_file(fields=fields, count=60)
+    assert len(data) > 8 * 1024
+
+    response = upload(client, data, "csv")
+
+    assert response.status_code == 303
+
+
 def test_preview_shows_all_row_errors_and_cannot_partially_register(app):
     client = app.test_client()
     data = xlsx_file(serials=[("EXAMPLE", "EXAMPLE-DUPLICATE")] * 27)
