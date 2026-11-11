@@ -191,6 +191,20 @@ def test_line_itself_enforces_serialized_quantity_invariants():
         replace(line, quantity=Quantity(1, "kg"))
 
 
+@pytest.mark.parametrize("unit", ["pcs", "PCS", "EXAMPLE-SET", "шт"])
+def test_serialized_receipt_uses_exact_registered_unit_without_changing_original(unit):
+    original = register_serialized_receipt(**receipt_input())
+    catalog = replace(receipt_input()["nomenclature"], unit_of_measure=unit)
+    result = register_serialized_receipt(**receipt_input(nomenclature=catalog, quantity=Quantity(27, unit)))
+    assert result.receipt.lines[0].quantity == Quantity(27, unit)
+    assert result.receipt.lines[0].total == original.receipt.lines[0].total
+    assert original.receipt.lines[0].quantity == Quantity(27, "pcs")
+    assert original.receipt.lines[0].unit_price == Money(Decimal("14500.00"), "UAH")
+    if unit != "pcs":
+        with pytest.raises(InvalidReceipt):
+            register_serialized_receipt(**receipt_input(nomenclature=catalog))
+
+
 def test_identity_factory_cannot_reuse_an_identity():
     with pytest.raises(InvalidReceipt, match="identities must be distinct"):
         register_serialized_receipt(**receipt_input(), new_id=lambda: UUID(int=1))

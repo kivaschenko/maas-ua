@@ -1,0 +1,12 @@
+{% extends 'base.html' %}
+{% block lang %}uk{% endblock %}
+{% block title %}Пошук майна · MAAS-UA{% endblock %}
+{% block content %}
+<h1>Пошук майна за серійним номером</h1>
+<p>Вкажіть точну пару: простір номерів та серійний номер. Регістр, початкові нулі та символи зберігаються; пробіли на краях не виправляються.</p>
+<form method="get" action="{{ url_for('inventory.search') }}">
+  <label>Простір номерів (namespace) <input name="namespace" required maxlength="4096" value="{{ request.args.get('namespace','') }}"></label>
+  <label>Серійний номер <input name="serial_value" required maxlength="4096" value="{{ request.args.get('serial_value','') }}"></label>
+  <button class="primary" type="submit">Знайти майно</button>
+</form>
+{% endblock %}

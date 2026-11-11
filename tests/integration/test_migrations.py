@@ -45,7 +45,7 @@ def test_upgrade_downgrade_and_metadata_agree(database_url, migration_config):
         with pytest.raises(RuntimeError, match="forward-only"):
             command.downgrade(migration_config, "0006")
         with engine.connect() as connection:
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0009"
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0010"
     finally:
         engine.dispose()
 
@@ -145,6 +145,78 @@ def test_historical_write_off_migration_remains_forward_only(database_url, migra
         command.downgrade(migration_config, "0005")
 
 
+def test_historical_memorial_migration_remains_forward_only(database_url, migration_config):
+    command.upgrade(migration_config, "0009")
+    with pytest.raises(RuntimeError, match="0009 is forward-only"):
+        command.downgrade(migration_config, "0008")
+
+
+def test_unit_migration_preserves_populated_0009(database_url, migration_config, write_off_receipt):
+    from sqlalchemy.orm import sessionmaker
+
+    from maas_ua.adapters.sqlalchemy import SqlAlchemyUnitOfWork
+
+    command.upgrade(migration_config, "0009")
+    engine = create_engine(database_url, hide_parameters=True)
+    try:
+        factory = sessionmaker(engine, autoflush=False, expire_on_commit=False)
+        with SqlAlchemyUnitOfWork(factory) as uow:
+            uow.nomenclatures.add(write_off_receipt.receipt.lines[0].nomenclature)
+            uow.receipts.add(write_off_receipt.receipt)
+            for unit in write_off_receipt.units:
+                uow.asset_units.add(unit)
+            uow.commit()
+        metadata = MetaData()
+        metadata.reflect(engine)
+        with engine.connect() as connection:
+            before = {
+                name: list(connection.execute(table.select().order_by(*table.primary_key)).mappings())
+                for name, table in metadata.tables.items()
+                if name != "alembic_version"
+            }
+        command.upgrade(migration_config, "head")
+        with engine.connect() as connection:
+            for name, rows in before.items():
+                table = metadata.tables[name]
+                assert list(connection.execute(table.select().order_by(*table.primary_key)).mappings()) == rows
+        command.check(migration_config)
+    finally:
+        engine.dispose()
+
+
+def test_unit_migration_refuses_to_rewrite_inconsistent_legacy_catalog(database_url, migration_config):
+    command.upgrade(migration_config, "0009")
+    engine = create_engine(database_url, hide_parameters=True)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text("""INSERT INTO nomenclatures
+                (id, code, name, tracking_policy, unit_of_measure)
+                VALUES ('EXAMPLE', 'EXAMPLE', 'Example', 'SERIALIZED', 'EXAMPLE-SET')""")
+            )
+            connection.execute(
+                text("""INSERT INTO receipt_documents
+                (id, document_number, document_date, effective_date, created_at, source)
+                VALUES (:id, 'EXAMPLE', '2026-01-01', '2026-01-01', '2026-01-01T00:00:00Z', 'EXAMPLE')"""),
+                {"id": (receipt_id := uuid4())},
+            )
+            connection.execute(
+                text("""INSERT INTO receipt_lines
+                (id, receipt_id, position, nomenclature_id, tracking_policy, quantity_count, quantity_unit,
+                 unit_price, currency, analytics)
+                VALUES (:id, :receipt, 0, 'EXAMPLE', 'SERIALIZED', 1, 'pcs', 1, 'UAH', '[]')"""),
+                {"id": uuid4(), "receipt": receipt_id},
+            )
+        with pytest.raises(RuntimeError, match="unit mismatches require review"):
+            command.upgrade(migration_config, "head")
+        with engine.connect() as connection:
+            assert connection.scalar(text("SELECT quantity_unit FROM receipt_lines")) == "pcs"
+            assert connection.scalar(text("SELECT unit_of_measure FROM nomenclatures")) == "EXAMPLE-SET"
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0009"
+    finally:
+        engine.dispose()
+
+
 def test_journal_migration_preserves_populated_0007(database_url, migration_config, write_off_receipt):
     from accounting_fixtures import chart, version
     from sqlalchemy.orm import sessionmaker
@@ -236,7 +308,7 @@ def test_memorial_migration_preserves_populated_0008_and_existing_financial_guar
             assert connection.scalar(text("SELECT count(*) FROM accounting_memorial_order_memberships")) == 0
             assert set(triggers) <= set(connection.execute(trigger_sql).all())
         command.check(migration_config)
-        with pytest.raises(RuntimeError, match="0009 is forward-only"):
+        with pytest.raises(RuntimeError, match="0010 is forward-only"):
             command.downgrade(migration_config, "0008")
     finally:
         engine.dispose()

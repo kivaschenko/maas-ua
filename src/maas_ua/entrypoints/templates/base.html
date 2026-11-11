@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="{% block lang %}en{% endblock %}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -18,8 +18,8 @@
   </style>
 </head>
 <body><main>
-  <p><a href="{{ url_for('imports.new') }}">MAAS-UA · Receipt imports</a></p>
-  <p class="notice">Local development only. Use synthetic data. Production access requires approved authentication and authorization.</p>
+  <nav aria-label="Навігація"><a href="{{ url_for('imports.new') }}">MAAS-UA · Імпорт надходжень</a> · <a href="{{ url_for('inventory.search') }}">Пошук майна</a> · <a href="{{ url_for('inventory.balances') }}">Залишки майна</a></nav>
+  <p class="notice">Лише локальна розробка та синтетичні дані. Для виробничого доступу потрібні затверджені автентифікація та авторизація.</p>
   {% block content %}{% endblock %}
 </main></body>
 </html>

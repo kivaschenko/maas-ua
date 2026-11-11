@@ -9,7 +9,7 @@
   <dt>Document date / effective date</dt><dd>{{ c.document_date }} / {{ c.effective_date }}</dd>
   <dt>Nomenclature / classification</dt><dd>{{ c.nomenclature_code }} / {{ c.classification }}</dd>
   <dt>Source</dt><dd>{{ c.source }}</dd>
-  <dt>Quantity / parsed units</dt><dd>{{ c.quantity }} pcs / {{ c.serials|length }}</dd>
+  <dt>Quantity / parsed units</dt><dd>{{ c.quantity }} / {{ c.serials|length }} (unit of measure from the registered nomenclature; no conversion)</dd>
   <dt>Unit price / line total</dt><dd>{{ c.unit_price }} / {{ c.line_total }} {{ c.currency }}</dd>
   <dt>Initial custody</dt><dd>{{ c.location_ref }} / {{ c.responsible_party_ref }}</dd>
   <dt>Receipt analytics</dt><dd>{% for key,value in c.analytics %}{{ key }}: {{ value }}{% if not loop.last %}; {% endif %}{% else %}None supplied{% endfor %}</dd>

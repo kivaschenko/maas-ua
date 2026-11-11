@@ -1,0 +1,43 @@
+{% extends 'base.html' %}
+{% from 'inventory/macros.html' import diagnostics, lifecycle %}
+{% block lang %}uk{% endblock %}
+{% block title %}Залишки майна · MAAS-UA{% endblock %}
+{% block content %}
+<h1>Залишки та первісна вартість майна</h1>
+<form method="get">
+  <label>Станом на кінець дня (включно) <input type="date" name="as_of" required value="{{ as_of }}"></label>
+  {% for key,label in [('nomenclature_id','Ідентифікатор номенклатури'), ('receipt_id','Ідентифікатор надходження (UUID)'), ('source','Джерело надходження'), ('location_ref','Місце зберігання'), ('responsible_party_ref','Відповідальна особа'), ('currency','Валюта')] %}
+  <label>{{ label }} <input name="{{ key }}" maxlength="4096" value="{{ request.args.get(key,'') }}"></label>
+  {% endfor %}
+  <label>Обліковий стан <select name="lifecycle_state">
+    {% for code,label in [('ACTIVE','На обліку'), ('WRITTEN_OFF','Списано'), ('ALL','Усі стани')] %}<option value="{{ code }}" {% if state == code %}selected{% endif %}>{{ label }}</option>{% endfor %}
+  </select></label>
+  <label>Вид звіту <select name="view"><option value="balance" {% if view == 'balance' %}selected{% endif %}>Залишки</option><option value="valuation" {% if view == 'valuation' %}selected{% endif %}>Первісна вартість</option></select></label>
+  <button class="primary" type="submit">Показати</button>
+</form>
+<p>Дата звіту: {{ report.as_of }}. Місце та відповідальність визначаються за історією на цю дату. Відсутній обліковий стан не прирівнюється до активного.</p>
+<p class="muted">Первісна вартість з надходжень; без амортизації та валютного перерахунку. Обліковий стан сам по собі не підтверджує фізичну наявність.</p>
+{% if not report.complete %}
+<div class="errors" role="alert"><h2>Підтверджений залишок недоступний</h2>
+<p>Історичні дані неповні. Часткові кількості, відомі суми та групи приховано, щоб не видати їх за підтверджений звіт.</p>
+{% for diagnostic in report.diagnostics %}{{ diagnostics(diagnostic.issues) }}{% endfor %}
+</div>
+{% else %}
+<p>Серійних записів: {{ report.count }}</p>
+<h2>Підсумки первісної вартості за валютою</h2>
+<ul>{% for total in report.totals %}<li>{{ total.acquisition_value|inventory_decimal }} {{ total.currency }}</li>{% else %}<li>Немає сум у вибірці.</li>{% endfor %}</ul>
+{% if report.groups %}
+<div class="scroll"><table>
+  <thead><tr><th>Номенклатура</th><th>Надходження / дата дії / джерело</th><th>Місце</th><th>Відповідальна особа</th><th>Обліковий стан</th><th>Кількість</th><th>Первісна ціна</th><th>Первісна вартість</th></tr></thead>
+  <tbody>{% for group in report.groups %}<tr>
+    <td>{{ group.nomenclature.code }} · {{ group.nomenclature.name }}</td>
+    <td>{{ group.origin.document_number }} · {{ group.origin.effective_date }} · {{ group.origin.source }}<br><small>{{ group.origin.receipt_id }} / {{ group.origin.line_id }}</small></td>
+    <td>{{ group.location_ref or 'Не встановлено' }}</td><td>{{ group.responsible_party_ref or 'Не встановлено' }}</td>
+    <td>{{ lifecycle(group.lifecycle_state) }}</td><td>{{ group.count }} {{ group.origin.unit_of_measure }}</td>
+    <td>{{ group.origin.unit_price|inventory_decimal }} {{ group.origin.currency }}</td>
+    <td>{{ group.acquisition_value|inventory_decimal }} {{ group.origin.currency }}</td>
+  </tr>{% endfor %}</tbody>
+</table></div>
+{% else %}<p>Немає записів за обраними параметрами.</p>{% endif %}
+{% endif %}
+{% endblock %}

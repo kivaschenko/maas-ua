@@ -1,0 +1,16 @@
+{% macro custody(value) -%}
+{% if value %}Місце: {{ value.location_ref }} · Відповідальна особа: {{ value.responsible_party_ref }}{% else %}Не встановлено{% endif %}
+{%- endmacro %}
+{% macro diagnostics(issues) -%}
+<ul>{% for issue in issues %}<li>{{ issue|inventory_diagnostic }}</li>{% endfor %}</ul>
+{%- endmacro %}
+{% macro lifecycle(value) -%}
+{{ {'ACTIVE':'На обліку', 'WRITTEN_OFF':'Списано'}.get(value, 'Не встановлено') }}{% if value %} ({{ value }}){% endif %}
+{%- endmacro %}
+{% macro write_off(value) -%}
+{% if value %}<dl>
+  <dt>Документ списання</dt><dd>{{ value.document_number }} · {{ value.document_date }}</dd>
+  <dt>Підстава / дата дозволу</dt><dd>{{ value.authorization_reference }} · {{ value.authorization_date }}</dd>
+  <dt>Дата дії / час реєстрації</dt><dd>{{ value.effective_date }} · {{ value.created_at }}</dd>
+</dl>{% endif %}
+{%- endmacro %}

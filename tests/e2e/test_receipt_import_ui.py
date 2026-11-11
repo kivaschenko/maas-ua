@@ -1,3 +1,4 @@
+import logging
 from io import BytesIO
 
 import pytest
@@ -163,3 +164,24 @@ def test_default_factory_assembles_without_connecting_or_migrating(monkeypatch):
     app = create_app({"TESTING": True})
     assert app.test_client().get("/imports/new").status_code == 200
     app.extensions["receipt_imports"].previews.close()
+
+
+def test_debug_requests_are_rejected_before_accessing_import_data(app):
+    assert not app.debug
+    app.config["DEBUG"] = True
+    assert app.test_client().get("/imports/new").status_code == 503
+
+
+def test_development_access_logs_omit_search_identities(app, caplog):
+    from werkzeug.serving import WSGIRequestHandler
+
+    # Exercise the installed development server's actual log formatting.
+    handler = object.__new__(WSGIRequestHandler)
+    handler.path = "/inventory/search?namespace=synthetic-private-namespace&serial_value=synthetic-private-serial"
+    handler.command = "GET"
+    handler.request_version = "HTTP/1.1"
+    handler.client_address = ("127.0.0.1", 12345)
+    with caplog.at_level(logging.INFO, logger="werkzeug"):
+        handler.log_request(200)
+    assert "200" in caplog.text
+    assert "synthetic-private" not in caplog.text

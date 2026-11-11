@@ -1,0 +1,8 @@
+{% extends 'base.html' %}
+{% block lang %}uk{% endblock %}
+{% block title %}Перегляд майна · MAAS-UA{% endblock %}
+{% block content %}
+<h1>Не вдалося виконати запит</h1>
+<p class="errors" role="alert">{{ message }}</p>
+<p><a href="{{ url_for('inventory.search') }}">Пошук майна</a> · <a href="{{ url_for('inventory.balances') }}">Залишки майна</a></p>
+{% endblock %}

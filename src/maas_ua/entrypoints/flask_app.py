@@ -1,5 +1,6 @@
 """Development-only factory. No schema changes or connections during assembly."""
 
+import logging
 import os
 import secrets
 from hmac import compare_digest
@@ -7,12 +8,14 @@ from hmac import compare_digest
 from flask import Flask, abort, render_template, request, session
 from werkzeug.exceptions import HTTPException, SecurityError
 
+from maas_ua.adapters.inventory import SqlAlchemyInventoryReader
 from maas_ua.adapters.receipt_import_files import MAX_FILE_BYTES
 from maas_ua.adapters.receipt_import_memory import MemoryPreviewStore
 from maas_ua.adapters.receipt_import_reader import SqlAlchemyReceiptImportReader
 from maas_ua.adapters.sqlalchemy import SqlAlchemyUnitOfWork
 from maas_ua.bootstrap import make_session_factory
 from maas_ua.entrypoints.imports import blueprint
+from maas_ua.entrypoints.inventory import blueprint as inventory_blueprint
 from maas_ua.service_layer.receipt_imports import (
     PreviewBusy,
     PreviewConsumed,
@@ -21,38 +24,54 @@ from maas_ua.service_layer.receipt_imports import (
 )
 
 
-def create_app(config=None, *, imports=None):
+class _PrivateAccessLog(logging.Filter):
+    """The local Werkzeug server must not log URLs containing inventory identifiers."""
+
+    def filter(self, record):
+        if isinstance(record.msg, str) and '"%s" %s %s' in record.msg:
+            # Werkzeug supplies request line, status, size. Keep only fixed text
+            # plus status/size; even invalid request-line fallback content is private.
+            if isinstance(record.args, tuple) and len(record.args) == 3:
+                record.args = ("local request", record.args[1], record.args[2])
+        return True
+
+
+def create_app(config=None, *, imports=None, inventory=None):
     if os.environ.get("WEB_CONCURRENCY", "1") != "1":
         raise ValueError("in-memory imports require a single local application process")
     app = Flask(__name__)
     app.config.from_mapping(
         SECRET_KEY=secrets.token_hex(32),
-        DEBUG=True,
+        DEBUG=False,
         MAX_CONTENT_LENGTH=MAX_FILE_BYTES + 128 * 1024,
         MAX_FORM_MEMORY_SIZE=128 * 1024,
         MAX_FORM_PARTS=8,
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Strict",
         TRUSTED_HOSTS=["localhost", "127.0.0.1", "[::1]"],
-        # LOCAL_DEVELOPMENT_ONLY=True,
     )
     if config:
         app.config.update(config)
-    # if not app.config["LOCAL_DEVELOPMENT_ONLY"]:
-    #     raise ValueError("production access requires approved authentication, authorization and shared staging")
+    access_logger = logging.getLogger("werkzeug")
+    if not any(isinstance(item, _PrivateAccessLog) for item in access_logger.filters):
+        access_logger.addFilter(_PrivateAccessLog())
     if imports is None:
         factory = make_session_factory(app.config.get("DATABASE_URL"))
         imports = ReceiptImportCoordinator(
             SqlAlchemyReceiptImportReader(factory), lambda: SqlAlchemyUnitOfWork(factory), MemoryPreviewStore()
         )
+        if inventory is None:
+            inventory = SqlAlchemyInventoryReader(factory.kw["bind"])
     app.extensions["receipt_imports"] = imports
+    app.extensions["inventory_reader"] = inventory
     app.register_blueprint(blueprint)
+    app.register_blueprint(inventory_blueprint)
 
     @app.before_request
     def protect_local_forms():
         if request.remote_addr not in {"127.0.0.1", "::1"}:
             abort(403)
-        if request.environ.get("wsgi.multiprocess"):
+        if app.debug or request.environ.get("wsgi.multiprocess"):
             abort(503)
         if request.method == "POST":
             expected = session.get("csrf_token")

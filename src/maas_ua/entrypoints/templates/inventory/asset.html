@@ -1,0 +1,63 @@
+{% extends 'base.html' %}
+{% from 'inventory/macros.html' import custody, diagnostics, lifecycle, write_off %}
+{% block lang %}uk{% endblock %}
+{% block title %}Картка майна · MAAS-UA{% endblock %}
+{% block content %}
+<h1>Картка майна</h1>
+<dl>
+  <dt>Простір номерів / серійний номер</dt><dd>{{ asset.serial_number.namespace }} / {{ asset.serial_number.value }}</dd>
+  <dt>Ідентифікатор майна</dt><dd>{{ asset.asset_id }}</dd>
+  <dt>Номенклатура</dt><dd>{% if asset.nomenclature %}{{ asset.nomenclature.code }} · {{ asset.nomenclature.name }}{% else %}Не встановлено{% endif %}</dd>
+</dl>
+{% if asset.issues %}<div class="notice">Відомості про майно неповні.{{ diagnostics(asset.issues) }}</div>{% endif %}
+<h2>Походження та первісна вартість</h2>
+{% if asset.origin %}{% set o=asset.origin %}
+<dl>
+  <dt>Документ надходження / дата документа</dt><dd>{{ o.document_number }} · {{ o.document_date }}</dd>
+  <dt>Дата дії надходження / час реєстрації</dt><dd>{{ o.effective_date }} · {{ o.created_at }}</dd>
+  <dt>Джерело надходження</dt><dd>{{ o.source }}</dd>
+  <dt>Первісна ціна придбання</dt><dd>{{ o.unit_price|inventory_decimal }} {{ o.currency }} / {{ o.unit_of_measure }}</dd>
+  <dt>Облікова класифікація</dt><dd>{{ o.accounting_classification or 'Не встановлено' }}</dd>
+  <dt>Аналітика надходження</dt><dd>{% for key,value in o.analytics %}{{ key }}: {{ value }}{% if not loop.last %}; {% endif %}{% else %}Не задано{% endfor %}</dd>
+  <dt>Початкове місце та відповідальність</dt><dd>{{ custody(asset.initial_custody) }}</dd>
+</dl>
+<p><a href="{{ url_for('inventory.balances', receipt_id=o.receipt_id, as_of=as_of, lifecycle_state='ALL') }}">Майно цього надходження на обрану дату</a></p>
+{% else %}<p class="notice">Походження не встановлено.</p>{% endif %}
+<p class="muted">Первісна вартість придбання з документа надходження. Амортизація та залишкова балансова вартість тут не розраховуються.</p>
+<h2>Остання облікова позиція</h2>
+<p>Усі зареєстровані події, включно з майбутніми датами дії. Обліковий стан сам по собі не підтверджує фізичну наявність.</p>
+{% if not current.complete %}<div class="notice">Поточна позиція неповна.{{ diagnostics(current.issues) }}</div>{% endif %}
+<p>{{ lifecycle(current.lifecycle_state) }}</p>
+<p>{{ custody(current.custody) }}</p>
+{{ write_off(current.write_off) }}
+<h2>Історична позиція</h2>
+<form method="get">
+  <label>Станом на кінець дня (включно) <input type="date" name="as_of" value="{{ as_of }}" required></label>
+  <button type="submit">Показати позицію</button>
+</form>
+{% if not position.complete %}<div class="notice">Історична позиція неповна. Показано лише наявні факти.{{ diagnostics(position.issues) }}</div>{% endif %}
+<dl>
+  <dt>Станом на</dt><dd>{{ position.as_of }}</dd>
+  <dt>Зареєстровано на цю дату</dt><dd>{{ {true:'Так', false:'Ні'}.get(position.registered, 'Не встановлено') }}</dd>
+  <dt>Обліковий стан</dt><dd>{{ lifecycle(position.lifecycle_state) }}</dd>
+  <dt>Місце та відповідальність на цю дату</dt><dd>{{ custody(position.custody) }}</dd>
+</dl>
+{{ write_off(position.write_off) }}
+<h2>Історія документів</h2>
+{% if not history.complete %}<div class="notice">Історія неповна. Показано наявні підтверджені факти.{{ diagnostics(history.issues) }}</div>{% endif %}
+{% for day in history.days %}
+<h3>{{ day.effective_date }}</h3>
+{% if not day.ordered %}<p class="notice">Порядок подій цього дня невідомий. Рядки не визначають хронологічної послідовності.</p>{% endif %}
+<div class="scroll"><table>
+  <thead><tr><th>Подія</th><th>Документ / дата</th><th>Дата дії</th><th>Звідки</th><th>Куди</th><th>Час реєстрації</th><th>Підстава списання</th></tr></thead>
+  <tbody>{% for event in day.events %}<tr>
+    <td>{{ {'RECEIPT':'Надходження', 'TRANSFER':'Переміщення', 'WRITE_OFF':'Списання'}.get(event.kind, 'Невідома подія') }}</td>
+    <td>{{ event.document_number }} · {{ event.document_date }}</td><td>{{ event.effective_date }}</td>
+    <td>{{ custody(event.source) }}</td><td>{{ custody(event.destination) }}</td>
+    <td>{{ event.created_at or 'Не встановлено' }}</td>
+    <td>{% if event.authorization_reference %}{{ event.authorization_reference }} · {{ event.authorization_date }}{% else %}—{% endif %}</td>
+  </tr>{% endfor %}</tbody>
+</table></div>
+{% else %}<p>Немає доступних подій.</p>{% endfor %}
+<p class="muted">Історія, остання позиція та позиція на дату використовують окремі знімки бази даних. Зміни між читаннями можуть відрізнятися; оновіть сторінку після завершення реєстрації документів.</p>
+{% endblock %}
