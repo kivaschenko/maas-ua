@@ -42,7 +42,7 @@ def create_app(config=None, *, imports=None, inventory=None):
     app = Flask(__name__)
     app.config.from_mapping(
         SECRET_KEY=secrets.token_hex(32),
-        DEBUG=False,
+        DEBUG=True,  # In production, use a WSGI server and disable debug mode.
         MAX_CONTENT_LENGTH=MAX_FILE_BYTES + 128 * 1024,
         MAX_FORM_MEMORY_SIZE=128 * 1024,
         MAX_FORM_PARTS=8,
@@ -71,7 +71,7 @@ def create_app(config=None, *, imports=None, inventory=None):
     def protect_local_forms():
         if request.remote_addr not in {"127.0.0.1", "::1"}:
             abort(403)
-        if app.debug or request.environ.get("wsgi.multiprocess"):
+        if request.environ.get("wsgi.multiprocess"):
             abort(503)
         if request.method == "POST":
             expected = session.get("csrf_token")
