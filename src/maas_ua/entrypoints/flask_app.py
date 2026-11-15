@@ -13,15 +13,19 @@ from maas_ua.adapters.receipt_import_files import MAX_FILE_BYTES
 from maas_ua.adapters.receipt_import_memory import MemoryPreviewStore
 from maas_ua.adapters.receipt_import_reader import SqlAlchemyReceiptImportReader
 from maas_ua.adapters.sqlalchemy import SqlAlchemyUnitOfWork
+from maas_ua.adapters.transfer_import_memory import MemoryTransferPreviewStore
+from maas_ua.adapters.transfer_import_reader import SqlAlchemyTransferImportReader
 from maas_ua.bootstrap import make_session_factory
 from maas_ua.entrypoints.imports import blueprint
 from maas_ua.entrypoints.inventory import blueprint as inventory_blueprint
+from maas_ua.entrypoints.transfers import blueprint as transfers_blueprint
 from maas_ua.service_layer.receipt_imports import (
     PreviewBusy,
     PreviewConsumed,
     PreviewUnavailable,
     ReceiptImportCoordinator,
 )
+from maas_ua.service_layer.transfer_imports import TransferImportCoordinator
 
 
 class _PrivateAccessLog(logging.Filter):
@@ -36,13 +40,13 @@ class _PrivateAccessLog(logging.Filter):
         return True
 
 
-def create_app(config=None, *, imports=None, inventory=None):
+def create_app(config=None, *, imports=None, inventory=None, transfers=None):
     if os.environ.get("WEB_CONCURRENCY", "1") != "1":
         raise ValueError("in-memory imports require a single local application process")
     app = Flask(__name__)
     app.config.from_mapping(
         SECRET_KEY=secrets.token_hex(32),
-        DEBUG=True,  # In production, use a WSGI server and disable debug mode.
+        DEBUG=False,
         MAX_CONTENT_LENGTH=MAX_FILE_BYTES + 128 * 1024,
         MAX_FORM_MEMORY_SIZE=128 * 1024,
         MAX_FORM_PARTS=8,
@@ -55,6 +59,7 @@ def create_app(config=None, *, imports=None, inventory=None):
     access_logger = logging.getLogger("werkzeug")
     if not any(isinstance(item, _PrivateAccessLog) for item in access_logger.filters):
         access_logger.addFilter(_PrivateAccessLog())
+    factory = None
     if imports is None:
         factory = make_session_factory(app.config.get("DATABASE_URL"))
         imports = ReceiptImportCoordinator(
@@ -62,16 +67,22 @@ def create_app(config=None, *, imports=None, inventory=None):
         )
         if inventory is None:
             inventory = SqlAlchemyInventoryReader(factory.kw["bind"])
+    if transfers is None and factory is not None:
+        transfers = TransferImportCoordinator(
+            SqlAlchemyTransferImportReader(factory), lambda: SqlAlchemyUnitOfWork(factory), MemoryTransferPreviewStore()
+        )
+    app.extensions["transfer_imports"] = transfers
     app.extensions["receipt_imports"] = imports
     app.extensions["inventory_reader"] = inventory
     app.register_blueprint(blueprint)
     app.register_blueprint(inventory_blueprint)
+    app.register_blueprint(transfers_blueprint)
 
     @app.before_request
     def protect_local_forms():
         if request.remote_addr not in {"127.0.0.1", "::1"}:
             abort(403)
-        if request.environ.get("wsgi.multiprocess"):
+        if app.debug or request.environ.get("wsgi.multiprocess"):
             abort(503)
         if request.method == "POST":
             expected = session.get("csrf_token")

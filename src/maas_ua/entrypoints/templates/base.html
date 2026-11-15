@@ -18,7 +18,7 @@
   </style>
 </head>
 <body><main>
-  <nav aria-label="Навігація"><a href="{{ url_for('imports.new') }}">MAAS-UA · Імпорт надходжень</a> · <a href="{{ url_for('inventory.search') }}">Пошук майна</a> · <a href="{{ url_for('inventory.balances') }}">Залишки майна</a></nav>
+  <nav aria-label="Навігація"><a href="{{ url_for('imports.new') }}">MAAS-UA · Імпорт надходжень</a> · <a href="{{ url_for('transfers.new') }}">Імпорт переміщень</a> · <a href="{{ url_for('inventory.search') }}">Пошук майна</a> · <a href="{{ url_for('inventory.balances') }}">Залишки майна</a></nav>
   <p class="notice">Лише локальна розробка та синтетичні дані. Для виробничого доступу потрібні затверджені автентифікація та авторизація.</p>
   {% block content %}{% endblock %}
 </main></body>

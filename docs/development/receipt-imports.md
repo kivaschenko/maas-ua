@@ -22,7 +22,7 @@ then explicitly confirm. The result retrieves the document and units from Postgr
 Close the result to release its preview slot. An error in any row rejects the whole
 receipt. Correct the file and upload again; individual rows cannot be accepted.
 
-`create_app(config=None, *, imports=None, inventory=None)` supports dependency injection for test
+`create_app(config=None, *, imports=None, inventory=None, transfers=None)` supports dependency injection for test
 clients and otherwise reuses `make_session_factory()` and `SqlAlchemyUnitOfWork`.
 The app owns its factory/engine for its process lifetime; UoWs close their own
 sessions. No connection is needed just to construct the application or view uploads.

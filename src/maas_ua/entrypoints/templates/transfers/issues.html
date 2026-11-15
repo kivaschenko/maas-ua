@@ -1,0 +1,3 @@
+{% if issues %}<div class="errors"><h2>Переміщення не підтверджено</h2><ul>
+{% for issue in issues %}<li>{% if issue.cell %}{{ issue.cell.sheet }}, рядок {{ issue.cell.row }}, {{ issue.cell.column }}: {% endif %}{{ issue.message }} <span class="muted">({{ issue.code }})</span></li>{% endfor %}
+</ul></div>{% endif %}

@@ -33,6 +33,8 @@ def _size(value, seen=None):
 
 
 class MemoryPreviewStore:
+    preview_type = ImportPreview
+
     def __init__(
         self,
         *,
@@ -68,14 +70,16 @@ class MemoryPreviewStore:
     def create(self, parsed, owner):
         with self._lock:
             self._expire()
-            size = _size(parsed) + 2048
+            preview = self.preview_type(
+                uuid4(), uuid4(), parsed.candidate, parsed.issues, self.clock() + self.ttl_seconds
+            )
+            size = _size(preview) + 2048
             if (
                 len(self._entries) >= self.max_previews
                 or sum(entry[0] == owner for entry in self._entries.values()) >= self.max_per_session
                 or sum(entry[2] for entry in self._entries.values()) + size > self.max_bytes
             ):
                 raise PreviewBusy("Preview capacity reached; discard an earlier preview or wait for expiry.")
-            preview = ImportPreview(uuid4(), uuid4(), parsed.candidate, parsed.issues, self.clock() + self.ttl_seconds)
             self._entries[preview.id] = (owner, preview, size)
             if self.start_timers:
                 timer = Timer(self.ttl_seconds, self._timer_expire)
@@ -95,7 +99,10 @@ class MemoryPreviewStore:
     def _replace(self, preview_id, owner, **changes):
         current = self.get(preview_id, owner)
         updated = replace(current, **changes)
-        _, _, size = self._entries[preview_id]
+        _, _, previous_size = self._entries[preview_id]
+        size = _size(updated) + 2048
+        if sum(entry[2] for entry in self._entries.values()) - previous_size + size > self.max_bytes:
+            raise PreviewBusy("Preview capacity reached; discard an earlier preview or wait for expiry.")
         self._entries[preview_id] = (owner, updated, size)
         return updated
 

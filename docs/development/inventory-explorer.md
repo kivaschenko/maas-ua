@@ -67,7 +67,7 @@ A balance page chooses one balance or valuation operation, whose groups and tota
 snapshot. Search and its redirect are also separate reads. No cross-request or cross-operation
 snapshot guarantee is claimed.
 
-`create_app(config=None, *, imports=None, inventory=None)` assembles both production readers on
+`create_app(config=None, *, imports=None, inventory=None, transfers=None)` assembles both production readers on
 the same existing session-factory engine when imports are not injected. Tests may inject both
 dependencies independently. Injecting only imports leaves inventory unconfigured; inventory
 requests then fail safely without creating an implicit second factory or database connection.
@@ -76,7 +76,8 @@ New pages use Ukrainian labels; Python/contracts/documentation and persisted ide
 unchanged. Templates separate labels from query data for future localization. Existing escaping,
 no-store, no-referrer, CSP, local/trusted-host limits, session ownership and write-CSRF remain.
 Debug defaults off and debug/multiprocess requests are rejected. No production access, RBAC,
-depreciation, currency conversion, transfer/write-off forms, pagination or exports are supplied.
+depreciation, currency conversion, write-off forms, pagination or exports are supplied.
+M7.3 adds [bulk transfer import](transfer-imports.md) using the existing transfer command.
 Large numbers of distinct report groups can produce large HTML tables; SQL remains set-based.
 Werkzeug development access logs retain status/size while replacing request lines with fixed
 text, so exact search identifiers and filters do not enter those logs.

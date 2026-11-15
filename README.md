@@ -4,7 +4,7 @@
 
 MAAS-UA is a Python application for traceable accounting of military property, initially focused on individually identified FPV drones and reusable unmanned aircraft systems (БпАК), with the longer-term goal of reconciling property registers and financial accounting.
 
-> **Status (2026-11-11):** M1–M5A, M6.1–M6.3, M7.1 receipt import, and M7.2 read-only Inventory Explorer are implemented. The local Flask interface supports exact serial search, historical custody, document history, quantity and acquisition valuation. Registered nomenclature units replace the literal `pcs` restriction. Property operations, financial posting, and memorial register assignment remain separate. Production access is not implemented.
+> **Status (2026-11-15):** M1–M5A, M6.1–M6.3, M7.1 receipt import, M7.2 read-only Inventory Explorer, and M7.3 bulk transfer import are implemented. The local Flask interface supports exact serial search, historical custody, document history, quantity and acquisition valuation. Registered nomenclature units replace the literal `pcs` restriction. Property operations, financial posting, and memorial register assignment remain separate. Production access is not implemented.
 >
 > **Data handling:** Use synthetic records in code, fixtures, prompts, CI, documentation, logs, and public discussions. Do not publish real military inventory, serial numbers, unit identities, custody/location data, accounting documents, or operational details. Follow applicable authorization and data-handling requirements.
 
@@ -32,7 +32,8 @@ The system distinguishes property/custody accounting from financial accounting. 
 | Fixed-asset amortization, automated postings, reconciliation | Planned |
 | Local Flask XLSX/CSV serialized-inventory receipt import | Implemented (M7.1); preview, confirmation, original-fact duplicate recognition |
 | Local Ukrainian Inventory Explorer with history, historical balances and acquisition valuation | Implemented (M7.2); explicit incomplete-data diagnostics |
-| Other import types, exports and financial reporting UI | Planned (M7+) |
+| Local Ukrainian XLSX/CSV bulk serialized-asset transfer import | Implemented (M7.3); exact serial resolution, preview, atomic confirmation and safe retries |
+| Write-off import, exports and financial reporting UI | Planned (M7+) |
 
 Implemented milestones do **not** imply production authorization, legal accounting compliance, or a complete financial ledger.
 
@@ -110,6 +111,7 @@ A homogeneous receipt line of 27 FPV drones has 27 `AssetUnit` records, each poi
 - **M6.4+ — Proposed:** form rendering, broader financial reports, automated postings and approved closing/correction rules.
 - **M7.1 — Implemented:** local single-process Flask receipt uploads, versioned two-sheet XLSX / flat CSV, typed validation, preview, explicit atomic confirmation, results and safe retries.
 - **M7.2 — Implemented:** exact registered units of measure, Ukrainian serial lookup, asset history, historical custody, balances and acquisition valuation through existing readers.
+- **M7.3 — Implemented:** bulk transfer XLSX/CSV, batch exact serial resolution, Ukrainian preview/confirmation, stable UUID retries and atomic existing service.
 - **M7+ — Proposed:** other import types, exports, broader reports and approved production access.
 
 The roadmap is a planning tool, not an assertion of final approved accounting functionality.
@@ -543,3 +545,11 @@ Read [`AGENTS.md`](AGENTS.md) and [`docs/architecture/domain-model.md`](docs/arc
 ## License
 
 Internal/project-specific; define a license explicitly before any public release.
+
+## Bulk transfer import (M7.3)
+
+Open `/transfers/import/new` in the existing local Flask app. Versioned XLSX/CSV files
+resolve exact serial identifiers to internal asset UUIDs and invoke the existing
+`TransferAssets` service. See the [schema, synthetic template, retry limits and browser
+acceptance guide](docs/development/transfer-imports.md). Preview staging is single-process
+and session-bound; no new migration or financial posting is introduced. Head remains `0010`.

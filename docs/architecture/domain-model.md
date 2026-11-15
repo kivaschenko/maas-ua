@@ -1221,3 +1221,37 @@ framework. No new production authentication, role policy, financial rules, posti
 transfer/write-off UI or deployment to a shared database is included. The manual and
 automated synthetic acceptance scenario is in the
 [explorer guide](../development/inventory-explorer.md).
+
+
+## 27. Milestone 7.3 — bulk serialized-asset transfer import
+
+The user requested implementation on 2026-11-15. Versioned `serialized_transfer_v1`
+XLSX/CSV files describe one immutable movement document with a common explicit source,
+destination and effective date. Exact namespace/serial pairs resolve through a batch
+read-only query to existing AssetUnit UUIDs; no serial normalization or invented units
+occur. Receipt provenance, identities, acquisition prices and initial custody remain
+unchanged. Unknown custody, ineligible lifecycle (including write-off), incorrect source
+and per-unit chronology violations reject the complete transfer. Pure validation reuses
+the existing transfer domain operation rather than defining new transition rules.
+
+The Ukrainian Flask workflow extends existing parsing safeguards, bounded session-owned
+memory staging, CSRF and Inventory Explorer navigation. Preview facts are advisory.
+Confirmation resolves fresh facts and invokes the unchanged `TransferAssets` service,
+which owns sorted UUID asset locks, refreshed state checks, documentary history and the
+single explicit commit. No importer custody UPDATE, reporting SQL change, financial
+posting, migration, new table or shared-database action is introduced.
+
+A preview UUID and retained movement UUID are separate technical identities. A retry
+reports already registered only when that movement UUID's original immutable header
+and exact complete membership agree, even after subsequent custody/lifecycle changes.
+Different original facts conflict. Uncertain results retain the same UUID for retry.
+New uploads receive new UUIDs; immediate repeated files fail source validation. There
+is no permanent file identity or paper-number uniqueness. After assets return, a fresh
+upload can be another valid movement; restart/expiry cannot establish upload identity.
+This limitation is explicit, without inferring a new document-number policy.
+
+Migration head remains `0010`. Its existing receipt/catalogue unit mismatch precondition
+continues to require operator review without historical rewrites. Single-process local
+limits and unimplemented production authentication/authorization remain. The complete
+contract, examples and acceptance checks are in the
+[transfer import guide](../development/transfer-imports.md).
