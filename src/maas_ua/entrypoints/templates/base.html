@@ -1,25 +1,38 @@
 <!doctype html>
-<html lang="{% block lang %}en{% endblock %}">
+<html lang="{% block lang %}uk{% endblock %}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>{% block title %}MAAS-UA receipt import{% endblock %}</title>
-  <style>
-    body { font: 16px/1.5 system-ui,sans-serif; color: #162b3b; background: #f6f8fa; margin: 0; }
-    main { max-width: 1100px; margin: 2rem auto; padding: 1.5rem; background: white; border: 1px solid #d8e1e8; border-radius: .5rem; }
-    h1,h2 { line-height: 1.2; } a { color: #125b93; } label { display: block; margin: 1rem 0; }
-    input,select,button { font: inherit; padding: .5rem; } button { cursor: pointer; }
-    button.primary { background: #155d53; color: white; border: 0; border-radius: .25rem; }
-    table { border-collapse: collapse; width: 100%; margin: 1rem 0; } th,td { text-align: left; border: 1px solid #d8e1e8; padding: .45rem; overflow-wrap: anywhere; }
-    .notice { padding: .8rem; border-left: 4px solid #b37b16; background: #fff7df; }
-    .errors { border-left: 4px solid #b32828; padding: .8rem; background: #fff3f3; }
-    .scroll { overflow-x: auto; } .muted { color: #526776; } dt { font-weight: 600; } dd { margin: 0 0 .6rem; overflow-wrap: anywhere; }
-    form.inline { display: inline-block; margin-right: 1rem; }
-  </style>
+  <meta name="theme-color" content="#263a32">
+  <title>{% block title %}Облік майна · MAAS-UA{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='main.css') }}">
 </head>
-<body><main>
-  <nav aria-label="Навігація"><a href="{{ url_for('imports.new') }}">MAAS-UA · Імпорт надходжень</a> · <a href="{{ url_for('transfers.new') }}">Імпорт переміщень</a> · <a href="{{ url_for('inventory.search') }}">Пошук майна</a> · <a href="{{ url_for('inventory.balances') }}">Залишки майна</a></nav>
-  <p class="notice">Лише локальна розробка та синтетичні дані. Для виробничого доступу потрібні затверджені автентифікація та авторизація.</p>
-  {% block content %}{% endblock %}
-</main></body>
+<body>
+  <div class="app-shell">
+    <header class="app-header">
+      <a class="brand" href="{{ url_for('imports.index') }}" aria-label="MAAS-UA — головна сторінка">
+        <span class="brand-mark" aria-hidden="true">М</span>
+        <span class="brand-copy">
+          <strong>MAAS-UA</strong>
+          <span class="brand-expansion">Military Asset Accounting System — Ukraine</span>
+        </span>
+      </a>
+      <details class="section-menu">
+        <summary><span class="menu-icon" aria-hidden="true"><i></i><i></i><i></i></span>Розділи</summary>
+        <nav class="section-links" aria-label="Розділи обліку">
+          <a href="{{ url_for('imports.index') }}" {% if request.endpoint == 'imports.index' %}aria-current="page"{% endif %}>Головна</a>
+          <a href="{{ url_for('imports.new') }}" {% if request.endpoint in ('imports.new', 'imports.upload', 'imports.preview', 'imports.result') %}aria-current="page"{% endif %}>Надходження</a>
+          <a href="{{ url_for('transfers.new') }}" {% if request.endpoint in ('transfers.new', 'transfers.upload', 'transfers.preview', 'transfers.result') %}aria-current="page"{% endif %}>Переміщення</a>
+          <a href="{{ url_for('inventory.search') }}" {% if request.endpoint in ('inventory.search', 'inventory.asset') %}aria-current="page"{% endif %}>Пошук майна</a>
+          <a href="{{ url_for('inventory.balances') }}" {% if request.endpoint == 'inventory.balances' %}aria-current="page"{% endif %}>Залишки та оцінка</a>
+        </nav>
+      </details>
+    </header>
+    <main>
+      <p class="notice" role="note">Локальний робочий інтерфейс для синтетичних даних. Для виробничого доступу потрібні затверджені автентифікація та авторизація.</p>
+      {% block content %}{% endblock %}
+    </main>
+    <footer class="app-footer">MAAS-UA <span aria-hidden="true">·</span> Облік і звірка майна</footer>
+  </div>
+</body>
 </html>
