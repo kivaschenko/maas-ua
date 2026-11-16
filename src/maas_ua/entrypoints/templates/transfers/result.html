@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block lang %}uk{% endblock %}
+{% block title %}Результат переміщення · MAAS-UA{% endblock %}
+{% block content %}
+<h1>{{ {'registered': 'Переміщення зареєстровано', 'already_registered': 'Переміщення вже зареєстровано', 'rejected': 'Переміщення відхилено', 'retryable': 'Результат потребує перевірки'}.get(result.status) }}</h1>
+{% set issues = result.issues %}{% include "transfers/issues.html" %}
+{% if result.movement_id %}<p>Ідентифікатор документа: {{ result.movement_id }}. Кількість одиниць: {{ result.asset_ids | length }}.</p>
+<p>Походження та первісна вартість збережені. Перегляньте історію та утримувача на потрібну дату:</p><ul>{% for id in result.asset_ids %}<li><a href="{{ url_for('inventory.asset', asset_id=id) }}">Картка майна {{ loop.index }}</a></li>{% endfor %}</ul>{% endif %}
+{% if result.status == 'retryable' %}<form method="post" action="{{ url_for('transfers.confirm', preview_id=preview_id) }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button>Повторити перевірку та підтвердження</button></form>{% endif %}
+<form method="post" action="{{ url_for('transfers.discard', preview_id=preview_id) }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button>Закрити</button></form>
+{% endblock %}

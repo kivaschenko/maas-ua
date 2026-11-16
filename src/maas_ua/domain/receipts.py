@@ -121,10 +121,8 @@ class ReceiptLine:
             self.nomenclature.tracking_policy is not TrackingPolicy.SERIALIZED
         ):
             raise InvalidReceipt("this receipt requires serialized nomenclature")
-        if not isinstance(self.quantity, Quantity) or (
-            self.quantity.unit != "pcs" or self.quantity.unit != self.nomenclature.unit_of_measure
-        ):
-            raise InvalidReceipt("serialized receipt quantity must use pcs")
+        if not isinstance(self.quantity, Quantity) or (self.quantity.unit != self.nomenclature.unit_of_measure):
+            raise InvalidReceipt("receipt quantity unit must exactly match the registered nomenclature")
         if not isinstance(self.unit_price, Money):
             raise InvalidReceipt("unit price must be Money")
         if not isinstance(self.analytics, (tuple, list)):

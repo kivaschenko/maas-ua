@@ -334,6 +334,19 @@ def test_database_rejects_invalid_line_values(command, session_factory, field, v
     assert counts(session_factory) == (0, 0, 0)
 
 
+def test_catalog_relationship_does_not_silently_rewrite_quantity_unit(command, session_factory):
+    from maas_ua.adapters.orm import NomenclatureRecord, receipt_to_record
+
+    record = receipt_to_record(build(command).receipt)
+    with session_factory() as session:
+        record.lines[0].nomenclature = session.get(NomenclatureRecord, command.nomenclature.id)
+        record.lines[0].quantity_unit = "EXAMPLE-SET"
+        session.add(record)
+        with pytest.raises(IntegrityError):
+            session.commit()
+    assert counts(session_factory) == (0, 0, 0)
+
+
 def test_uow_can_be_reused_after_failure_and_success(command, session_factory):
     writer = SqlAlchemyUnitOfWork(session_factory)
     first = register_inventory_receipt(command, writer)

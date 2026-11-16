@@ -94,13 +94,29 @@ def test_duplicate_errors_identify_all_rows_without_exposing_values(candidate, c
     assert all(candidate.serials[0].value not in issue.message for issue in errors)
 
 
-def test_catalog_must_exist_and_be_serialized_in_pcs(candidate, catalog):
+def test_catalog_must_exist_and_be_serialized(candidate, catalog):
     for invalid in (
         None,
         replace(catalog, tracking_policy=TrackingPolicy.QUANTITY),
-        replace(catalog, unit_of_measure="kg"),
     ):
         assert validate_import_candidate(candidate, invalid).command is None
+
+
+@pytest.mark.parametrize("unit", ["pcs", "PCS", "EXAMPLE-SET", "шт"])
+@pytest.mark.parametrize("kind,make_file", [("csv", csv_file), ("xlsx", xlsx_file)])
+def test_import_derives_unit_from_registered_catalog(catalog, unit, kind, make_file):
+    catalog = replace(catalog, unit_of_measure=unit)
+    store = FakeStore(nomenclatures=(catalog,))
+    imports = ReceiptImportCoordinator(
+        FakeReceiptImportReader(store), lambda: FakeUnitOfWork(store), MemoryPreviewStore(start_timers=False)
+    )
+    parsed = parse_receipt_upload(make_file(), kind)
+    assert validate_import_candidate(parsed.candidate, catalog).command.quantity.unit == unit
+    preview = imports.preview(parsed, "a")
+    assert imports.confirm(preview.id, "a").status == "registered"
+    line = imports.receipt(preview.id, "a").receipt.lines[0]
+    assert line.quantity.unit == unit
+    assert line.total.amount == Decimal("391500.00")
 
 
 def test_exact_money_validation_ignores_ambient_context(candidate, catalog):

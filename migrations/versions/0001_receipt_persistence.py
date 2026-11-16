@@ -44,15 +44,9 @@ def upgrade() -> None:
             name=op.f("fk_receipt_lines_receipt_id_receipt_documents"),
         ),
         sa.UniqueConstraint("receipt_id", "position", name="uq_receipt_lines_position"),
-        sa.CheckConstraint(
-            "position >= 0", name=op.f("ck_receipt_lines_position_nonnegative")
-        ),
-        sa.CheckConstraint(
-            "quantity_count > 0", name=op.f("ck_receipt_lines_quantity_positive")
-        ),
-        sa.CheckConstraint(
-            "quantity_unit = 'pcs'", name=op.f("ck_receipt_lines_quantity_unit_pcs")
-        ),
+        sa.CheckConstraint("position >= 0", name=op.f("ck_receipt_lines_position_nonnegative")),
+        sa.CheckConstraint("quantity_count > 0", name=op.f("ck_receipt_lines_quantity_positive")),
+        sa.CheckConstraint("quantity_unit = 'pcs'", name=op.f("ck_receipt_lines_quantity_unit_pcs")),
         sa.CheckConstraint(
             "tracking_policy = 'SERIALIZED'",
             name=op.f("ck_receipt_lines_tracking_serialized"),
@@ -74,13 +68,9 @@ def upgrade() -> None:
             ["receipt_lines.id"],
             name=op.f("fk_asset_units_receipt_line_id_receipt_lines"),
         ),
-        sa.UniqueConstraint(
-            "serial_namespace", "serial_value", name="uq_asset_units_serial"
-        ),
+        sa.UniqueConstraint("serial_namespace", "serial_value", name="uq_asset_units_serial"),
     )
-    op.create_index(
-        op.f("ix_asset_units_receipt_line_id"), "asset_units", ["receipt_line_id"]
-    )
+    op.create_index(op.f("ix_asset_units_receipt_line_id"), "asset_units", ["receipt_line_id"])
 
 
 def downgrade() -> None:

@@ -28,8 +28,11 @@ from maas_ua.service_layer.receipts import (
 )
 
 catalog = Nomenclature(
-    "EXAMPLE-FPV", TrackingPolicy.SERIALIZED,
-    code="EXAMPLE-FPV", name="Example drone", unit_of_measure="pcs",
+    "EXAMPLE-FPV",
+    TrackingPolicy.SERIALIZED,
+    code="EXAMPLE-FPV",
+    name="Example drone",
+    unit_of_measure="pcs",
 )
 store = FakeStore(nomenclatures=(catalog,))
 command = RegisterInventoryReceipt(
@@ -41,9 +44,7 @@ command = RegisterInventoryReceipt(
     quantity=Quantity(27, "pcs"),
     unit_price=Money(Decimal("14500.00"), "UAH"),
     line_total=Money(Decimal("391500.00"), "UAH"),
-    serial_numbers=tuple(
-        SerialNumber("EXAMPLE-ISSUER", f"EXAMPLE-FPV-{i:04}") for i in range(1, 28)
-    ),
+    serial_numbers=tuple(SerialNumber("EXAMPLE-ISSUER", f"EXAMPLE-FPV-{i:04}") for i in range(1, 28)),
 )
 result = register_inventory_receipt(command, FakeUnitOfWork(store))
 assert len(store.asset_units) == 27

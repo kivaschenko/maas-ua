@@ -4,7 +4,7 @@
 
 MAAS-UA is a Python application for traceable accounting of military property, initially focused on individually identified FPV drones and reusable unmanned aircraft systems (БпАК), with the longer-term goal of reconciling property registers and financial accounting.
 
-> **Status (2026-11-07):** M1–M5A, M6.1–M6.3, and M7.1 local Flask serialized-inventory receipt import are implemented. XLSX/CSV uploads require preview and explicit confirmation through the existing receipt command. Property operations, financial posting, and memorial register assignment remain separate. Production access and broader reporting UI are not implemented.
+> **Status (2026-11-15):** M1–M5A, M6.1–M6.3, M7.1 receipt import, M7.2 read-only Inventory Explorer, and M7.3 bulk transfer import are implemented. The local Flask interface supports exact serial search, historical custody, document history, quantity and acquisition valuation. Registered nomenclature units replace the literal `pcs` restriction. Property operations, financial posting, and memorial register assignment remain separate. Production access is not implemented.
 >
 > **Data handling:** Use synthetic records in code, fixtures, prompts, CI, documentation, logs, and public discussions. Do not publish real military inventory, serial numbers, unit identities, custody/location data, accounting documents, or operational details. Follow applicable authorization and data-handling requirements.
 
@@ -31,7 +31,9 @@ The system distinguishes property/custody accounting from financial accounting. 
 | Primary memorial registers, membership, finalization and canonical turnover queries | Implemented (M6.3) |
 | Fixed-asset amortization, automated postings, reconciliation | Planned |
 | Local Flask XLSX/CSV serialized-inventory receipt import | Implemented (M7.1); preview, confirmation, original-fact duplicate recognition |
-| Other import types, exports and user-facing reports | Planned (M7+) |
+| Local Ukrainian Inventory Explorer with history, historical balances and acquisition valuation | Implemented (M7.2); explicit incomplete-data diagnostics |
+| Local Ukrainian XLSX/CSV bulk serialized-asset transfer import | Implemented (M7.3); exact serial resolution, preview, atomic confirmation and safe retries |
+| Write-off import, exports and financial reporting UI | Planned (M7+) |
 
 Implemented milestones do **not** imply production authorization, legal accounting compliance, or a complete financial ledger.
 
@@ -108,6 +110,8 @@ A homogeneous receipt line of 27 FPV drones has 27 `AssetUnit` records, each poi
 - **M6.3 — Implemented:** explicitly identified memorial registers, unique whole-entry primary membership, finalization, and turnover/assignment queries.
 - **M6.4+ — Proposed:** form rendering, broader financial reports, automated postings and approved closing/correction rules.
 - **M7.1 — Implemented:** local single-process Flask receipt uploads, versioned two-sheet XLSX / flat CSV, typed validation, preview, explicit atomic confirmation, results and safe retries.
+- **M7.2 — Implemented:** exact registered units of measure, Ukrainian serial lookup, asset history, historical custody, balances and acquisition valuation through existing readers.
+- **M7.3 — Implemented:** bulk transfer XLSX/CSV, batch exact serial resolution, Ukrainian preview/confirmation, stable UUID retries and atomic existing service.
 - **M7+ — Proposed:** other import types, exports, broader reports and approved production access.
 
 The roadmap is a planning tool, not an assertion of final approved accounting functionality.
@@ -434,7 +438,8 @@ Open <http://127.0.0.1:5000/imports/new>, explicitly select the serialized recei
 import type, and download its template. XLSX uses `Document` field/value rows and
 `SerialNumbers` asset rows; CSV repeats document/line metadata per asset. One upload
 must describe one complete homogeneous serialized **INVENTORY** line. Catalog
-nomenclature must already exist with `SERIALIZED` tracking and `pcs`; complete
+nomenclature must already exist with `SERIALIZED` tracking; its exact registered unit
+is used without aliases or conversion. Complete
 initial custody is required. All errors block the whole document.
 
 Money is exact Decimal: numeric XLSX cells are read from original XML decimal tokens
@@ -466,6 +471,35 @@ No staging table, migration, automatic journal, or memorial generation was added
 See [the full import contract and synthetic walkthrough](docs/development/receipt-imports.md)
 and [the domain decision](docs/architecture/domain-model.md#25-milestone-71--local-serialized-inventory-receipt-import).
 
+## M7.2: Inventory Explorer and registered units
+
+Use the same local Flask process and navigation as receipt import:
+
+- `/inventory/search`: exact `namespace` and `serial_value` lookup, with no case or whitespace normalization.
+- `/inventory/assets/<asset_id>`: original receipt/price/source/classification, document-backed history,
+  latest recorded custody, write-off evidence, and an `as_of` end-of-day position.
+- `/inventory/balances`: historical quantity and acquisition valuation, filtered by date,
+  nomenclature ID, receipt UUID, source, location, responsible party, currency and lifecycle.
+
+New pages use Ukrainian labels and preserve persisted identifiers. Import results link to each
+asset. Incomplete reports show diagnostics without partial quantities, currency totals or groups.
+Empty complete reports show zero serial records. Currencies and units remain distinct; there is
+no FX, depreciation or claim of physical presence from accounting lifecycle.
+
+All five M4/M5A query contracts and the existing set-based SQL reader are reused unchanged.
+Each operation retains REPEATABLE READ, READ ONLY isolation. The asset page composes separate
+snapshots for history, latest recorded position and selected-date position; it does not promise
+cross-query consistency. A balance/valuation page uses one reader operation and one snapshot.
+
+Forward-only migration `0010` replaces the receipt-line `pcs` CHECK with exact catalogue-unit
+referential integrity and a text CHECK. It preserves all historical rows and rejects existing
+catalogue/receipt unit mismatches for review. It does not map `PCS`, `pcs`, `шт` or other labels,
+convert quantities, seed units, or rewrite nomenclature. Shared/development/Neon databases have
+not been migrated by this change; startup still performs no migrations.
+
+See [the explorer guide and manual acceptance steps](docs/development/inventory-explorer.md)
+for input semantics, dependency injection, limitations and the synthetic 27/12/8 walkthrough.
+
 ## Testing strategy
 
 ```text
@@ -494,7 +528,7 @@ uv run pytest -q --tb=short
 uv run ruff check .
 ```
 
-The migration tests check Alembic/ORM agreement, historical revision reversibility, `0005`/`0006` downgrade refusal and preservation of populated legacy rows. The scale test checks fixed reporting query count and runs `EXPLAIN (ANALYZE, BUFFERS)` on 5,000 synthetic assets and 2,750 movement lines. An earlier M4 position aggregation measured approximately 13 ms; this is diagnostic, not a production performance guarantee. No extra reporting indexes were justified by that plan. Formatting checks for M4 use changed Python files; unrelated historical formatting differences remain untouched.
+The migration tests check Alembic/ORM agreement, historical revision reversibility, forward-only guards and preservation of populated legacy rows. The scale test checks fixed reporting query count and runs `EXPLAIN (ANALYZE, BUFFERS)` on 5,000 synthetic assets and 2,750 movement lines. An earlier M4 position aggregation measured approximately 13 ms; this is diagnostic, not a production performance guarantee. No extra reporting indexes were justified by that plan. Repository-wide lint and formatting checks pass; M7.2 includes formatting-only cleanup of three existing files without changing their behavior.
 
 Do not run Alembic against production or shared databases without an approved deployment/migration procedure.
 
@@ -511,3 +545,11 @@ Read [`AGENTS.md`](AGENTS.md) and [`docs/architecture/domain-model.md`](docs/arc
 ## License
 
 Internal/project-specific; define a license explicitly before any public release.
+
+## Bulk transfer import (M7.3)
+
+Open `/transfers/import/new` in the existing local Flask app. Versioned XLSX/CSV files
+resolve exact serial identifiers to internal asset UUIDs and invoke the existing
+`TransferAssets` service. See the [schema, synthetic template, retry limits and browser
+acceptance guide](docs/development/transfer-imports.md). Preview staging is single-process
+and session-bound; no new migration or financial posting is introduced. Head remains `0010`.

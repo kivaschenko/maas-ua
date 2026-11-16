@@ -236,17 +236,19 @@ def _serial(values, cells, issues):
     return None
 
 
-def _csv(data, delimiter):
+def _csv(data, delimiter, *, fields=DOCUMENT_FIELDS, header_parser=_header, candidate_builder=_candidate, receipt=True):
     if delimiter not in {",", ";"}:
         raise _StructureError("dialect", "Select a comma or semicolon CSV delimiter.")
     reader = csv.reader(StringIO(data.decode("utf-8-sig"), newline=""), delimiter=delimiter, strict=True)
     columns = next(reader, [])
-    required = {*DOCUMENT_FIELDS, *SERIAL_FIELDS, "line_key"}
+    required = {*fields, *SERIAL_FIELDS, *(["line_key"] if receipt else [])}
     if (
         not required <= set(columns)
         or len(set(columns)) != len(columns)
         or len(columns) > MAX_COLUMNS
-        or any(len(key) > 128 or (key not in required and not key.startswith("analytic.")) for key in columns)
+        or any(
+            len(key) > 128 or (key not in required and not (receipt and key.startswith("analytic."))) for key in columns
+        )
     ):
         raise _StructureError("headers", "Use the exact required CSV headers and optional analytic.<key> columns.")
     issues, serials, first_header, first_cells, first_line = [], [], None, {}, None
@@ -270,12 +272,12 @@ def _csv(data, delimiter):
             continue
         values = dict(zip(columns, row, strict=True))
         cells = {key: ImportCell("CSV", row_number, get_column_letter(i)) for i, key in enumerate(columns, 1)}
-        header = _header(values, cells, issues)
-        line = _text(values["line_key"], "line_key", cells["line_key"], issues)
+        header = header_parser(values, cells, issues)
+        line = _text(values["line_key"], "line_key", cells["line_key"], issues) if receipt else None
         if first_header is None:
             first_header, first_cells, first_line = header, cells, line
         elif header != first_header:
-            for key in DOCUMENT_FIELDS:
+            for key in fields:
                 if header.get(key) != first_header.get(key):
                     issues.append(
                         _issue(
@@ -285,7 +287,7 @@ def _csv(data, delimiter):
                             cells[key],
                         )
                     )
-            if header["analytics"] != first_header["analytics"]:
+            if receipt and header["analytics"] != first_header["analytics"]:
                 issues.append(
                     _issue(
                         "analytics",
@@ -308,7 +310,7 @@ def _csv(data, delimiter):
             serials.append(serial)
     if first_header is None:
         raise _StructureError("empty_file", "Include at least one serialized asset row.")
-    return _candidate(first_header, serials, first_cells, issues)
+    return candidate_builder(first_header, serials, first_cells, issues)
 
 
 def _workbook_parts(archive):
@@ -393,7 +395,7 @@ def _workbook_parts(archive):
     return paths, numeric, bounds
 
 
-def _xlsx(data):
+def _xlsx(data, *, fields=DOCUMENT_FIELDS, header_parser=_header, candidate_builder=_candidate, receipt=True):
     with ZipFile(BytesIO(data)) as archive:
         paths, numeric, bounds = _workbook_parts(archive)
     workbook = load_workbook(BytesIO(data), read_only=True, data_only=False, keep_links=False)
@@ -425,7 +427,7 @@ def _xlsx(data):
                 not isinstance(key, str)
                 or len(key) > 128
                 or key in values
-                or (key not in DOCUMENT_FIELDS and not key.startswith("analytic."))
+                or (key not in fields and not (receipt and key.startswith("analytic.")))
             ):
                 issues.append(
                     _issue(
@@ -437,7 +439,7 @@ def _xlsx(data):
                 )
                 continue
             values[key], cells[key] = value, cell
-        header = _header(values, cells, issues)
+        header = header_parser(values, cells, issues)
         serial_rows = rows("SerialNumbers")
         if next(serial_rows, None) != list(SERIAL_FIELDS):
             raise _StructureError("headers", "SerialNumbers row 1 must contain serial_namespace,serial_value.")
@@ -447,20 +449,24 @@ def _xlsx(data):
             serial = _serial(row, [ImportCell("SerialNumbers", number, col) for col in ("A", "B")], issues)
             if serial:
                 serials.append(serial)
-        return _candidate(header, serials, cells, issues)
+        return candidate_builder(header, serials, cells, issues)
     finally:
         workbook.close()
 
 
 def parse_receipt_upload(data: bytes, file_type: str, *, delimiter: str = ",") -> ParsedReceiptImport:
     """Return safe diagnostics; never interpolate a cell or underlying exception."""
+    return _parse_upload(data, file_type, delimiter=delimiter)
+
+
+def _parse_upload(data, file_type, *, delimiter=",", **layout):
     if len(data) > MAX_FILE_BYTES:
         return ParsedReceiptImport(None, (_issue("file", "file_limit", "Upload at most 5 MiB."),))
     try:
         if file_type == "csv":
-            return _csv(data, delimiter)
+            return _csv(data, delimiter, **layout)
         if file_type == "xlsx":
-            return _xlsx(data)
+            return _xlsx(data, **layout)
         raise _StructureError("file_type", "Only CSV and XLSX files are supported.")
     except _StructureError as error:
         return ParsedReceiptImport(None, (_issue("file", error.code, error.message),))

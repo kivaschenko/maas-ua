@@ -24,9 +24,7 @@ def database_url():
         or url.username != "maas_test"
         or url.host not in {"localhost", "127.0.0.1", "::1"}
     ):
-        pytest.fail(
-            "TEST_DATABASE_URL must select the local maas_test/maas_ua_test service"
-        )
+        pytest.fail("TEST_DATABASE_URL must select the local maas_test/maas_ua_test service")
 
     # Never migrate, truncate, or drop the database supplied by the environment.
     # Only this fixture's newly created, random database is disposable.

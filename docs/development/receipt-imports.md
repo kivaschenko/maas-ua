@@ -22,7 +22,7 @@ then explicitly confirm. The result retrieves the document and units from Postgr
 Close the result to release its preview slot. An error in any row rejects the whole
 receipt. Correct the file and upload again; individual rows cannot be accepted.
 
-`create_app(config=None, *, imports=None)` supports dependency injection for test
+`create_app(config=None, *, imports=None, inventory=None, transfers=None)` supports dependency injection for test
 clients and otherwise reuses `make_session_factory()` and `SqlAlchemyUnitOfWork`.
 The app owns its factory/engine for its process lifetime; UoWs close their own
 sessions. No connection is needed just to construct the application or view uploads.
@@ -52,7 +52,7 @@ Required Document fields:
 | `document_date` | Document date |
 | `effective_date` | Explicit receipt-effective date; not derived from document/creation time |
 | `source` | Exact nonblank receipt-source reference |
-| `nomenclature_code` | Exact code of an existing `SERIALIZED`, `pcs` catalog record |
+| `nomenclature_code` | Exact code of an existing `SERIALIZED` catalog record; its registered unit is authoritative |
 | `line_quantity` | Positive integer, at most 1,000, equal to serialized unit count |
 | `unit_price` | Finite nonnegative decimal, including zero |
 | `currency` | Exact nonblank currency text; no inferred currency or FX |
@@ -79,6 +79,9 @@ No fill-down is performed. Row widths must match the header. Quoted CSV values a
 supported; diagnostics use physical CSV line numbers, including quoted multiline fields.
 
 Both transports produce the same frozen typed candidate and shared business validator.
+M7.2 derives the receipt quantity unit from this existing catalog record. The file has
+no unit override: aliases and implicit conversions are not supported. `pcs`, `PCS`,
+`шт` and approved set codes remain distinct; serialized tracking does not pick a label.
 Duplicate serial pairs identify every implicated row. Case, leading zeros, Unicode,
 namespaces, nomenclature codes and other text references are preserved. Outer whitespace
 and NUL are rejected rather than stripped. No catalog records or serials are invented.
@@ -182,10 +185,15 @@ from maas_ua.domain.receipts import Nomenclature, TrackingPolicy
 factory = make_session_factory()
 with SqlAlchemyUnitOfWork(factory) as uow:
     if uow.nomenclatures.get_by_code("EXAMPLE-FPV") is None:
-        uow.nomenclatures.add(Nomenclature(
-            "EXAMPLE-ID", TrackingPolicy.SERIALIZED, code="EXAMPLE-FPV",
-            name="Example", unit_of_measure="pcs",
-        ))
+        uow.nomenclatures.add(
+            Nomenclature(
+                "EXAMPLE-ID",
+                TrackingPolicy.SERIALIZED,
+                code="EXAMPLE-FPV",
+                name="Example",
+                unit_of_measure="pcs",
+            )
+        )
         uow.commit()
 ```
 
@@ -202,3 +210,7 @@ while retaining those serials produces conflicts with no new property records.
 Automated tests generate synthetic files in memory. Parser, fake-UoW, Flask-client
 and real PostgreSQL tests cover this flow, invalid documents, exact identities,
 precision, cross-session isolation, concurrency, rollback and uncertain commits.
+
+After confirmation, each asset UUID links to its read-only inventory card. Navigation
+also opens exact serial search and historical balances. See the
+[Inventory Explorer guide](inventory-explorer.md) for the 27/12/8 acceptance scenario.

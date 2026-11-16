@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block lang %}uk{% endblock %}
+{% block title %}Перевірка переміщення · MAAS-UA{% endblock %}
+{% block content %}
+<h1>Перевірка переміщення</h1>
+<p>Перегляд не змінює облік. Перед підтвердженням стан майна перевіряється повторно. Помилка будь-якої одиниці відхиляє весь документ.</p>
+{% set issues = preview.issues %}{% include "transfers/issues.html" %}
+{% if preview.candidate %}{% set c = preview.candidate %}
+<dl><dt>Номер документа</dt><dd>{{ c.document_number }}</dd><dt>Дата документа / дата переміщення</dt><dd>{{ c.document_date }} / {{ c.effective_date }}</dd>
+<dt>Джерело: місце / відповідальна сторона</dt><dd>{{ c.source.location_ref }} / {{ c.source.responsible_party_ref }}</dd>
+<dt>Призначення: місце / відповідальна сторона</dt><dd>{{ c.destination.location_ref }} / {{ c.destination.responsible_party_ref }}</dd>
+<dt>Кількість серійних одиниць</dt><dd>{{ c.serials | length }}</dd></dl>
+<div class="scroll"><table><thead><tr><th>Рядок</th><th>Простір серійних номерів</th><th>Точне значення</th></tr></thead><tbody>
+{% for row in c.serials %}<tr><td>{{ row.cell.sheet }}:{{ row.cell.row }}</td><td>{{ row.namespace }}</td><td>{{ row.value }}</td></tr>{% endfor %}
+</tbody></table></div>
+{% endif %}
+{% if preview.resolved %}<h2>Знайдене майно</h2><table><thead><tr><th>Номенклатура</th><th>Серійний ідентифікатор</th></tr></thead><tbody>
+{% for asset in preview.resolved %}<tr><td>{{ asset.nomenclature_code }} · {{ asset.nomenclature_name }}</td><td><a href="{{ url_for('inventory.asset', asset_id=asset.unit.id) }}">{{ asset.unit.serial_number.namespace }} / {{ asset.unit.serial_number.value }}</a></td></tr>{% endfor %}
+</tbody></table>{% endif %}
+{% if preview.ready %}<form class="inline" method="post" action="{{ url_for('transfers.confirm', preview_id=preview.id) }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="primary">Підтвердити переміщення</button></form>{% endif %}
+<form class="inline" method="post" action="{{ url_for('transfers.discard', preview_id=preview.id) }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button>Відкинути перегляд</button></form>
+{% endblock %}

@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block lang %}uk{% endblock %}
+{% block title %}Імпорт переміщень · MAAS-UA{% endblock %}
+{% block content %}
+<h1>Імпорт переміщень</h1>
+<p>Один файл — один документ, спільні джерело, призначення та дата для всіх одиниць майна. До 1000 одиниць, 5 МіБ.</p>
+<p>Шаблони: <a href="{{ url_for('transfers.template', file_type='xlsx') }}">XLSX</a> · <a href="{{ url_for('transfers.template', file_type='csv') }}">CSV</a>. Версія: <code>{{ import_type }}</code>.</p>
+<p>Серійні ідентифікатори вводьте як точний текст зі збереженням початкових нулів та регістру. Дати: YYYY-MM-DD.</p>
+<form method="post" action="{{ url_for('transfers.upload') }}" enctype="multipart/form-data">
+<input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+<input type="hidden" name="import_type" value="{{ import_type }}">
+<label>Файл <input type="file" name="file" accept=".xlsx,.csv" required></label>
+<label>Роздільник CSV <select name="delimiter"><option value=",">Кома</option><option value=";">Крапка з комою</option></select></label>
+<button class="primary">Завантажити та перевірити</button>
+</form>
+{% endblock %}

@@ -16,7 +16,7 @@
 </dl>
 <div class="scroll"><table>
   <thead><tr><th>Asset UUID</th><th>Namespace</th><th>Serial value</th></tr></thead>
-  <tbody>{% for unit in receipt.units %}<tr><td>{{ unit.id }}</td><td>{{ unit.serial_number.namespace }}</td><td>{{ unit.serial_number.value }}</td></tr>{% endfor %}</tbody>
+  <tbody>{% for unit in receipt.units %}<tr><td><a href="{{ url_for('inventory.asset',asset_id=unit.id) }}">{{ unit.id }}</a></td><td>{{ unit.serial_number.namespace }}</td><td>{{ unit.serial_number.value }}</td></tr>{% endfor %}</tbody>
 </table></div>
 {% endif %}
 {% if result.status != 'retryable' %}

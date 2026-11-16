@@ -1117,7 +1117,9 @@ Unsupported multiple lines/worksheets, formulas, missing/ambiguous values or any
 invalid row reject the whole document. No existing command or domain invariant is
 weakened. Other callers may still use unknown initial custody/classification where
 the existing command permits it; this import requires both custody references and
-explicit INVENTORY. Catalog records must already exist, with SERIALIZED tracking/pcs.
+explicit INVENTORY. Catalog records must already exist with SERIALIZED tracking.
+M7.2 corrects the original literal `pcs` restriction: the exact registered catalog unit
+is authoritative, independent of tracking and accounting classification.
 
 Exact namespace/value serial identity remains case-sensitive without normalization.
 References, leading zeros and Unicode remain text. Quantity must equal serial count;
@@ -1165,3 +1167,91 @@ document editing or asynchronous import infrastructure were added.
 
 The detailed file contract, precision limits, retry boundaries, local startup and a
 synthetic 27-unit example are in [the import guide](../development/receipt-imports.md).
+
+## 26. Milestone 7.2 — Inventory Explorer and exact registered units
+
+The user requested this correction and read-only UI on 2026-11-11. A serialized
+receipt quantity must match `Nomenclature.unit_of_measure` exactly. Tracking policy
+and accounting classification remain separate; `PCS`, `pcs`, `шт`, set codes and other
+explicitly registered labels are not aliases. No unit conversion or catalogue is added.
+Import candidates have no unit override; both file formats derive the command quantity
+unit from the registered nomenclature. Domain and service validation retain exact
+catalogue matching. Original receipt quantities/prices/units and nomenclatures remain intact.
+
+The unsupported restriction existed in the domain ReceiptLine, import validation and
+command construction, preview wording and database CHECK. Forward-only `0010` follows
+`0009`: it replaces the literal-unit CHECK with a text CHECK, adds a unique referenced
+`(id, unit_of_measure)` catalogue key, and replaces the receipt's ID-only catalogue FK
+with `(nomenclature_id, quantity_unit)` referential integrity. This also prevents a
+referenced catalogue unit from being changed in place. Existing mismatches abort the
+migration for review; no historic row is corrected, backfilled or deleted. Historical
+migrations retain their schema behavior (`0001` received formatting-only cleanup).
+Verification migrates uniquely named disposable test databases only.
+
+The existing Flask factory gains an injectable InventoryReader and one inventory
+blueprint. Ukrainian Jinja pages expose exact serial lookup, immutable receipt origin,
+original acquisition price, classification, documentary transfers/write-offs, latest
+recorded custody and historical end-of-business-date position. Latest recorded means
+all registered effective events, including future dates; selected-date position never
+substitutes that custody. Accounting lifecycle alone does not establish physical presence.
+Legacy same-day movement ties remain explicitly unordered; missing custody remains unknown.
+
+Balance and valuation pages reuse all five M4/M5A query contracts and unchanged Core SQL.
+Filters include date, nomenclature ID, receipt UUID, receipt source, historical location,
+responsible party, currency and lifecycle (active by default). Group quantities keep
+their units; the record count counts identities, not combined physical quantities.
+Currency acquisition totals remain separate, with exact Decimal display and no FX,
+rounding or depreciation. Incomplete reports display diagnostics while suppressing all
+groups, quantities and monetary totals, including diagnostic known values. Valid empty
+reports show zero records and no invented currency.
+
+Each reader call retains its own REPEATABLE READ, READ ONLY snapshot. The balance page
+chooses one balance or valuation operation, so its groups and totals share a snapshot.
+The asset page composes history, latest position and selected-date position in separate
+transactions; neither documentation nor UI claims a shared snapshot across them.
+Concurrent commits can make these sections differ until refresh. Reporting does not
+load aggregate collections or issue a per-asset query loop.
+
+The local single-process, loopback/trusted-host, no-store, escaping and write-CSRF
+boundaries remain. The factory defaults debug off and rejects debug requests. Submitted
+values and database exceptions are not interpolated into error messages or application
+logs. Werkzeug development access logs redact request lines while retaining status and size.
+New templates isolate UI labels for later gettext adoption without a new i18n
+framework. No new production authentication, role policy, financial rules, posting UI,
+transfer/write-off UI or deployment to a shared database is included. The manual and
+automated synthetic acceptance scenario is in the
+[explorer guide](../development/inventory-explorer.md).
+
+
+## 27. Milestone 7.3 — bulk serialized-asset transfer import
+
+The user requested implementation on 2026-11-15. Versioned `serialized_transfer_v1`
+XLSX/CSV files describe one immutable movement document with a common explicit source,
+destination and effective date. Exact namespace/serial pairs resolve through a batch
+read-only query to existing AssetUnit UUIDs; no serial normalization or invented units
+occur. Receipt provenance, identities, acquisition prices and initial custody remain
+unchanged. Unknown custody, ineligible lifecycle (including write-off), incorrect source
+and per-unit chronology violations reject the complete transfer. Pure validation reuses
+the existing transfer domain operation rather than defining new transition rules.
+
+The Ukrainian Flask workflow extends existing parsing safeguards, bounded session-owned
+memory staging, CSRF and Inventory Explorer navigation. Preview facts are advisory.
+Confirmation resolves fresh facts and invokes the unchanged `TransferAssets` service,
+which owns sorted UUID asset locks, refreshed state checks, documentary history and the
+single explicit commit. No importer custody UPDATE, reporting SQL change, financial
+posting, migration, new table or shared-database action is introduced.
+
+A preview UUID and retained movement UUID are separate technical identities. A retry
+reports already registered only when that movement UUID's original immutable header
+and exact complete membership agree, even after subsequent custody/lifecycle changes.
+Different original facts conflict. Uncertain results retain the same UUID for retry.
+New uploads receive new UUIDs; immediate repeated files fail source validation. There
+is no permanent file identity or paper-number uniqueness. After assets return, a fresh
+upload can be another valid movement; restart/expiry cannot establish upload identity.
+This limitation is explicit, without inferring a new document-number policy.
+
+Migration head remains `0010`. Its existing receipt/catalogue unit mismatch precondition
+continues to require operator review without historical rewrites. Single-process local
+limits and unimplemented production authentication/authorization remain. The complete
+contract, examples and acceptance checks are in the
+[transfer import guide](../development/transfer-imports.md).

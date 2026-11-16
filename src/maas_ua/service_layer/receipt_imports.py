@@ -162,8 +162,8 @@ def validate_import_candidate(
 
     if catalog is None or catalog.code != candidate.nomenclature_code:
         problem("nomenclature_code", "missing_nomenclature", "Select an existing registered nomenclature code.")
-    elif catalog.tracking_policy is not TrackingPolicy.SERIALIZED or catalog.unit_of_measure != "pcs":
-        problem("nomenclature_code", "unsupported_tracking", "The nomenclature must use SERIALIZED tracking and pcs.")
+    elif catalog.tracking_policy is not TrackingPolicy.SERIALIZED:
+        problem("nomenclature_code", "unsupported_tracking", "The nomenclature must use SERIALIZED tracking.")
     if candidate.classification is not AccountingClassification.INVENTORY:
         problem(
             "accounting_classification", "inventory_required", "This import requires explicit INVENTORY classification."
@@ -205,7 +205,7 @@ def validate_import_candidate(
         effective_date=candidate.effective_date,
         source=candidate.source,
         nomenclature=catalog,
-        quantity=Quantity(candidate.quantity, "pcs"),
+        quantity=Quantity(candidate.quantity, catalog.unit_of_measure),
         unit_price=price,
         line_total=total,
         serial_numbers=tuple(SerialNumber(row.namespace, row.value) for row in candidate.serials),

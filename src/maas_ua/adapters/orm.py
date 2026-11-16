@@ -13,6 +13,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     MetaData,
     Numeric,
     Sequence,
@@ -54,6 +55,7 @@ class NomenclatureRecord(Base):
     __tablename__ = "nomenclatures"
     __table_args__ = (
         UniqueConstraint("code", name="uq_nomenclatures_code"),
+        UniqueConstraint("id", "unit_of_measure", name="uq_nomenclatures_id_unit"),
         CheckConstraint("tracking_policy IN ('SERIALIZED', 'QUANTITY')", name="tracking_policy"),
         *(
             CheckConstraint(f"{column} <> '' AND {column} = btrim({column})", name=f"{column}_text")
@@ -107,6 +109,11 @@ class ReceiptDocumentRecord(Base):
 class ReceiptLineRecord(Base):
     __tablename__ = "receipt_lines"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["nomenclature_id", "quantity_unit"],
+            ["nomenclatures.id", "nomenclatures.unit_of_measure"],
+            name="fk_receipt_lines_nomenclature_unit",
+        ),
         UniqueConstraint("receipt_id", "position", name="uq_receipt_lines_position"),
         CheckConstraint("position >= 0", name="position_nonnegative"),
         CheckConstraint(
@@ -114,7 +121,7 @@ class ReceiptLineRecord(Base):
             name="accounting_classification",
         ),
         CheckConstraint("quantity_count > 0", name="quantity_positive"),
-        CheckConstraint("quantity_unit = 'pcs'", name="quantity_unit_pcs"),
+        CheckConstraint("quantity_unit <> '' AND quantity_unit = btrim(quantity_unit)", name="quantity_unit_text"),
         CheckConstraint("tracking_policy = 'SERIALIZED'", name="tracking_serialized"),
         CheckConstraint(
             "unit_price >= 0 AND unit_price < 'Infinity'::numeric",
@@ -125,8 +132,10 @@ class ReceiptLineRecord(Base):
     id: Mapped[UUID] = mapped_column(primary_key=True)
     receipt_id: Mapped[UUID] = mapped_column(ForeignKey("receipt_documents.id"))
     position: Mapped[int]
-    nomenclature_id: Mapped[str] = mapped_column(ForeignKey("nomenclatures.id"))
-    nomenclature: Mapped[NomenclatureRecord] = relationship()
+    nomenclature_id: Mapped[str] = mapped_column(Text)
+    # Only synchronize identity. The composite database FK validates the stored
+    # unit; assigning a relationship must never overwrite it to fit the catalog.
+    nomenclature: Mapped[NomenclatureRecord] = relationship(foreign_keys=[nomenclature_id])
     tracking_policy: Mapped[str] = mapped_column(Text)
     accounting_classification: Mapped[str | None] = mapped_column(Text)
     quantity_count: Mapped[int] = mapped_column(BigInteger)

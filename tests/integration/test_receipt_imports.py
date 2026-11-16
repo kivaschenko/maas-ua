@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import date
 from io import BytesIO
 from threading import Barrier
@@ -193,3 +194,40 @@ def test_full_flask_xlsx_receipt_flow_persists_27_units(imports, session_factory
     assert result.status_code == 200 and b"Receipt registered" in result.data
     assert b"EXAMPLE-0026" in result.data
     assert counts(session_factory) == (1, 1, 27)
+
+
+@pytest.mark.parametrize("unit", ["PCS", "EXAMPLE-SET", "шт"])
+def test_non_pcs_import_persists_exact_catalog_unit_and_preserves_original(imports, session_factory, unit):
+    original_preview = imports.preview(parse_receipt_upload(xlsx_file(), "xlsx"), "a")
+    imports.confirm(original_preview.id, "a")
+    original = imports.receipt(original_preview.id, "a")
+    catalog = replace(
+        original.receipt.lines[0].nomenclature, id="EXAMPLE-SET-ID", code="EXAMPLE-SET", unit_of_measure=unit
+    )
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.nomenclatures.add(catalog)
+        uow.commit()
+    parsed = parse_receipt_upload(
+        xlsx_file(
+            fields=document_fields(nomenclature_code=catalog.code), serials=[("OTHER", str(n)) for n in range(27)]
+        ),
+        "xlsx",
+    )
+    preview = imports.preview(parsed, "a")
+    assert imports.confirm(preview.id, "a").status == "registered"
+    line = imports.receipt(preview.id, "a").receipt.lines[0]
+    assert line.quantity.unit == unit and line.total.amount == 391500
+    assert imports.receipt(original_preview.id, "a") == original
+
+    # Direct SQL cannot bypass the exact catalog-unit contract or reinterpret history.
+    from sqlalchemy.exc import IntegrityError
+
+    for statement, parameters in [
+        ("UPDATE receipt_lines SET quantity_unit='pcs' WHERE id=:id", {"id": line.id}),
+        ("UPDATE nomenclatures SET unit_of_measure='pcs' WHERE id=:id", {"id": catalog.id}),
+    ]:
+        with session_factory() as session:
+            with pytest.raises(IntegrityError):
+                session.execute(text(statement), parameters)
+                session.commit()
+    assert imports.receipt(preview.id, "a").receipt.lines[0] == line
