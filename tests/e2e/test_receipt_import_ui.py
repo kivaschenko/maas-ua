@@ -67,6 +67,24 @@ def test_upload_preview_confirm_and_retrieve_27_units(app, kind, make_file):
         assert set(session) == {"csrf_token", "import_session"}
 
 
+def test_home_dashboard_links_to_existing_workflows_and_loads_local_styles(app):
+    client = app.test_client()
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "Робоче місце обліковця" in response.text
+    assert "Military Asset Accounting System — Ukraine" in response.text
+    assert 'href="/imports/new"' in response.text
+    assert 'href="/transfers/import/new"' in response.text
+    assert 'href="/inventory/search"' in response.text
+    assert 'href="/inventory/balances"' in response.text
+    assert "<details" in response.text and "Розділи обліку" in response.text
+    stylesheet = client.get("/static/main.css")
+    assert stylesheet.status_code == 200
+    assert "text/css" in stylesheet.content_type
+
+
 def test_upload_accepts_valid_csv_larger_than_form_memory_limit(app):
     client = app.test_client()
     fields = document_fields(line_quantity="60", line_total="870000.00")

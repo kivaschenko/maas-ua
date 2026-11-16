@@ -23,7 +23,7 @@ def _owner():
 
 @blueprint.get("/")
 def index():
-    return redirect(url_for("imports.new"), code=303)
+    return render_template("dashboard.html")
 
 
 @blueprint.get("/imports/new")

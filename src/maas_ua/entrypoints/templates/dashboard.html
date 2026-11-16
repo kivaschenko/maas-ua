@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Головна · MAAS-UA{% endblock %}
+{% block content %}
+<section class="dashboard-intro" aria-labelledby="dashboard-title">
+  <p class="eyebrow">Робоче місце обліковця</p>
+  <h1 id="dashboard-title">Облік майна</h1>
+  <p class="lead">Вводьте документи, знаходьте окремі одиниці та переглядайте підтверджені залишки на потрібну дату.</p>
+</section>
+
+<section class="dashboard-section" aria-labelledby="input-title">
+  <div class="section-heading">
+    <span class="section-kicker">01</span>
+    <div><h2 id="input-title">Введення даних</h2><p>Завантажте документ для перевірки перед реєстрацією.</p></div>
+  </div>
+  <div class="action-grid">
+    <article class="action-card">
+      <span class="action-number" aria-hidden="true">01</span>
+      <h3>Надходження майна</h3>
+      <p>Імпортуйте серійну номенклатуру з CSV або XLSX та перегляньте результат перевірки.</p>
+      <a class="action-link" href="{{ url_for('imports.new') }}">Перейти до надходжень <span aria-hidden="true">→</span></a>
+    </article>
+    <article class="action-card">
+      <span class="action-number" aria-hidden="true">02</span>
+      <h3>Переміщення майна</h3>
+      <p>Завантажте документ переміщення та перевірте серійні номери й дані перед підтвердженням.</p>
+      <a class="action-link" href="{{ url_for('transfers.new') }}">Перейти до переміщень <span aria-hidden="true">→</span></a>
+    </article>
+  </div>
+</section>
+
+<section class="dashboard-section" aria-labelledby="reports-title">
+  <div class="section-heading">
+    <span class="section-kicker">02</span>
+    <div><h2 id="reports-title">Пошук і звіти</h2><p>Переглядайте наявні облікові дані та історію.</p></div>
+  </div>
+  <div class="action-grid">
+    <article class="action-card">
+      <span class="action-number" aria-hidden="true">03</span>
+      <h3>Пошук майна</h3>
+      <p>Знайдіть одиницю за точним серійним номером і перегляньте її історію.</p>
+      <a class="action-link" href="{{ url_for('inventory.search') }}">Відкрити пошук <span aria-hidden="true">→</span></a>
+    </article>
+    <article class="action-card">
+      <span class="action-number" aria-hidden="true">04</span>
+      <h3>Залишки та оцінка</h3>
+      <p>Сформуйте таблицю залишків і первісної вартості станом на обрану дату.</p>
+      <a class="action-link" href="{{ url_for('inventory.balances') }}">Відкрити звіт <span aria-hidden="true">→</span></a>
+    </article>
+  </div>
+</section>
+{% endblock %}
