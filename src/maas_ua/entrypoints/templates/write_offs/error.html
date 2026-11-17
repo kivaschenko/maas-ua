@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block lang %}uk{% endblock %}
+{% block title %}Імпорт списання · MAAS-UA{% endblock %}
+{% block content %}<h1>Запит не виконано</h1><p class="errors">{{ message }}</p>
+{% if result_url %}<a href="{{ result_url }}">Переглянути результат</a>{% endif %}
+<p><a href="{{ url_for('write_offs.new') }}">Новий імпорт списання</a></p>{% endblock %}

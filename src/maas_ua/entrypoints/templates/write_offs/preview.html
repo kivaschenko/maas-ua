@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block lang %}uk{% endblock %}
+{% block title %}Перевірка списання · MAAS-UA{% endblock %}
+{% block content %}
+<h1>Перевірка списання</h1>
+<p>Перегляд не змінює облік. Перед підтвердженням стан майна перевіряється повторно. Помилка будь-якої одиниці відхиляє весь документ.</p>
+{% set issues = preview.issues %}{% include "write_offs/issues.html" %}
+{% if preview.candidate %}{% set c = preview.candidate %}
+<dl><dt>Номер документа</dt><dd>{{ c.document_number }}</dd><dt>Дата акта / дата прийняття до обліку</dt><dd>{{ c.document_date }} / {{ c.effective_date }}</dd>
+<dt>Дозвіл / дата дозволу</dt><dd>{{ c.authorization_reference }} / {{ c.authorization_date }}</dd>
+<dt>Кількість серійних одиниць</dt><dd>{{ c.serials | length }}</dd></dl>
+<p>Дата прийняття до обліку — дата прийняття фінансово-економічною службою перевіреного та дозволеного пакета документів. Вона вводиться явно.</p>
+<div class="scroll"><table><thead><tr><th>Рядок</th><th>Простір серійних номерів</th><th>Точне значення</th></tr></thead><tbody>
+{% for row in c.serials %}<tr><td>{{ row.cell.sheet }}:{{ row.cell.row }}</td><td>{{ row.namespace }}</td><td>{{ row.value }}</td></tr>{% endfor %}
+</tbody></table></div>
+{% endif %}
+{% if preview.resolved %}<h2>Знайдене майно</h2><table><thead><tr><th>Номенклатура</th><th>Класифікація надходження / життєвий цикл</th><th>Надходження / останнє переміщення</th><th>Серійний ідентифікатор</th></tr></thead><tbody>
+{% for asset in preview.resolved %}<tr><td>{{ asset.nomenclature_code }} · {{ asset.nomenclature_name }}</td><td>{{ asset.facts.accounting_classification.value if asset.facts.accounting_classification else "Невідома" }} / {{ asset.unit.lifecycle_state.value if asset.unit.lifecycle_state else "Невідомий" }}</td><td>{{ asset.facts.receipt_effective_date }} / {{ asset.facts.latest_transfer_effective_date or "—" }}</td><td><a href="{{ url_for('inventory.asset', asset_id=asset.unit.id) }}">{{ asset.unit.serial_number.namespace }} / {{ asset.unit.serial_number.value }}</a></td></tr>{% endfor %}
+</tbody></table>{% endif %}
+{% if preview.ready %}<form class="inline" method="post" action="{{ url_for('write_offs.confirm', preview_id=preview.id) }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="primary">Підтвердити списання</button></form>{% endif %}
+<form class="inline" method="post" action="{{ url_for('write_offs.discard', preview_id=preview.id) }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button>Відкинути перегляд</button></form>
+{% endblock %}
