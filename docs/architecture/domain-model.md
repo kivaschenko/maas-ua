@@ -1255,3 +1255,32 @@ continues to require operator review without historical rewrites. Single-process
 limits and unimplemented production authentication/authorization remain. The complete
 contract, examples and acceptance checks are in the
 [transfer import guide](../development/transfer-imports.md).
+
+
+## 28. Milestone 7.4 — bulk serialized-inventory write-off import
+
+The versioned XLSX/CSV import stages a frozen candidate containing act number/date,
+authorization reference/date, explicit accounting acceptance date and exact serial pairs.
+Preview resolves the batch in a read-only snapshot and evaluates existing M5A invariants
+using receipt-time classification and tracking facts. Mixed receipts and custodians are
+permitted. Confirmation revalidates and calls the unchanged `WriteOffAssets` service;
+UUID-ordered locks, refreshed facts, one commit and unique unit membership remain final
+transactional safeguards. No migration, property entity change or financial posting occurs.
+
+The application retains a technical write-off UUID independently of preview identity and
+paper act number. Exact immutable header facts and unordered complete asset membership
+allow import-level `already_registered` recognition after an uncertain commit, even after
+lifecycle changes. The service still rejects duplicate UUIDs. New uploads receive new UUIDs;
+already written-off assets reject the batch. Nonunique paper numbers cannot detect repeated
+paper facts with disjoint assets without a separately approved document identity policy.
+
+Under the approved Drone-first strategy, the property/financial accounting core remains
+reusable and domain-neutral. Stable asset identity, origin and historical documents survive
+write-off so future modules may reference them. ACTIVE/WRITTEN_OFF property lifecycle is
+separate from future UAV technical status (SERVICEABLE, UNSERVICEABLE, UNDER_REPAIR).
+Flight hours, repairs, servicing, component replacement and alerts remain future work.
+Fixed-asset UAV disposal requires a separately approved workflow; M7.4 supports serialized
+INVENTORY only. No hypothetical module abstractions or integration events are introduced.
+
+See [write-off import handoff](../development/write-off-imports.md) for file layout,
+security, staging limits, retry behavior, routes and browser acceptance.

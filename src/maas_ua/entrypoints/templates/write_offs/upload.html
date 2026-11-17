@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block lang %}uk{% endblock %}
+{% block title %}Імпорт списання · MAAS-UA{% endblock %}
+{% block content %}
+<h1>Імпорт списання</h1>
+<p>Один файл — один акт та дата прийняття до обліку. Дозволено різні надходження й утримувачів. До 1000 одиниць, 5 МіБ.</p>
+<p>Шаблони: <a href="{{ url_for('write_offs.template', file_type='xlsx') }}">XLSX</a> · <a href="{{ url_for('write_offs.template', file_type='csv') }}">CSV</a>. Версія: <code>{{ import_type }}</code>.</p>
+<p>Серійні ідентифікатори вводьте як точний текст зі збереженням початкових нулів та регістру. Дати: YYYY-MM-DD.</p>
+<p>Лише серійне майно з класифікацією INVENTORY. Дата прийняття до обліку обов’язкова. Фінансові проведення не створюються.</p>
+<form method="post" action="{{ url_for('write_offs.upload') }}" enctype="multipart/form-data">
+<input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+<input type="hidden" name="import_type" value="{{ import_type }}">
+<label>Файл <input type="file" name="file" accept=".xlsx,.csv" required></label>
+<label>Роздільник CSV <select name="delimiter"><option value=",">Кома</option><option value=";">Крапка з комою</option></select></label>
+<button class="primary">Завантажити та перевірити</button>
+</form>
+{% endblock %}
