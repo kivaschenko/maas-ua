@@ -184,6 +184,15 @@ def test_default_factory_assembles_without_connecting_or_migrating(monkeypatch):
     app.extensions["receipt_imports"].previews.close()
 
 
+def test_factory_uses_configured_secret_key_from_environment(monkeypatch):
+    monkeypatch.setenv("WEB_CONCURRENCY", "1")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://synthetic:synthetic@127.0.0.1:1/synthetic")
+    monkeypatch.setenv("SECRET_KEY", "synthetic-environment-secret")
+    app = create_app({"TESTING": True})
+    assert app.secret_key == "synthetic-environment-secret"
+    app.extensions["receipt_imports"].previews.close()
+
+
 def test_debug_requests_are_rejected_before_accessing_import_data(app):
     assert not app.debug
     app.config["DEBUG"] = True

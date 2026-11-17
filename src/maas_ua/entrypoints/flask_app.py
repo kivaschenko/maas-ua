@@ -49,7 +49,7 @@ def create_app(config=None, *, imports=None, inventory=None, transfers=None, wri
         raise ValueError("in-memory imports require a single local application process")
     app = Flask(__name__)
     app.config.from_mapping(
-        SECRET_KEY=secrets.token_hex(32),
+        SECRET_KEY=os.environ.get("SECRET_KEY") or secrets.token_hex(32),
         DEBUG=False,
         MAX_CONTENT_LENGTH=MAX_FILE_BYTES + 128 * 1024,
         MAX_FORM_MEMORY_SIZE=128 * 1024,

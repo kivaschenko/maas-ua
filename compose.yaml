@@ -23,5 +23,55 @@ services:
     volumes:
       - ./servers.json:/pgadmin4/servers.json
 
+  postgres-production:
+    image: postgres:18
+    profiles: ["production"]
+    restart: unless-stopped
+    network_mode: host
+    command: ["postgres", "-c", "listen_addresses=127.0.0.1", "-c", "port=5433"]
+    environment:
+      POSTGRES_DB: maas_ua
+      POSTGRES_USER: maas
+      POSTGRES_PASSWORD: ${PROD_DB_PASSWORD:-}
+    volumes:
+      - postgres_production_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5433 -U maas -d maas_ua"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["production"]
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      postgres-production:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://maas:${PROD_DB_PASSWORD:-}@127.0.0.1:5433/maas_ua
+      SECRET_KEY: ${APP_SECRET_KEY:-}
+      WEB_CONCURRENCY: "1"
+    command:
+      [
+        "python",
+        "-m",
+        "flask",
+        "--app",
+        "maas_ua.entrypoints.flask_app:create_app",
+        "--no-debug",
+        "run",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000",
+        "--no-reload",
+        "--no-debugger",
+      ]
+
 volumes:
   postgres_data:
+  postgres_production_data:

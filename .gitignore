@@ -14,3 +14,4 @@ wheels/
 
 # ENV files
 .env
+.env.production

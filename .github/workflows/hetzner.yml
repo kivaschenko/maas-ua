@@ -1,0 +1,72 @@
+name: Test and deploy to Hetzner
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install Python
+        run: uv python install 3.14
+      - name: Install dependencies
+        run: uv sync --locked
+      - name: Start isolated PostgreSQL
+        run: docker compose -f compose.test.yaml up -d --wait
+      - name: Run checks
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://maas_test:test_password@127.0.0.1:55432/maas_ua_test
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run pytest
+      - name: Stop isolated PostgreSQL
+        if: always()
+        run: docker compose -f compose.test.yaml down -v
+
+  deploy:
+    needs: checks
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy on Hetzner
+        env:
+          HETZNER_HOST: ${{ secrets.HETZNER_HOST }}
+          HETZNER_USER: ${{ secrets.HETZNER_USER }}
+          HETZNER_SSH_KEY: ${{ secrets.HETZNER_SSH_KEY }}
+          HETZNER_KNOWN_HOSTS: ${{ secrets.HETZNER_KNOWN_HOSTS }}
+        run: |
+          set -eu
+          test -n "$HETZNER_HOST"
+          test -n "$HETZNER_USER"
+          test -n "$HETZNER_SSH_KEY"
+          test -n "$HETZNER_KNOWN_HOSTS"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$HETZNER_SSH_KEY" > "$HOME/.ssh/hetzner_deploy"
+          printf '%s\n' "$HETZNER_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/hetzner_deploy" "$HOME/.ssh/known_hosts"
+          ssh -i "$HOME/.ssh/hetzner_deploy" \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$HETZNER_USER@$HETZNER_HOST" \
+            'set -eu
+             if [ ! -d /opt/maas-ua/.git ]; then
+               git clone --branch main --depth 1 https://github.com/kivaschenko/maas-ua.git /opt/maas-ua
+             fi
+             cd /opt/maas-ua
+             git checkout main
+             git pull --ff-only origin main
+             test -f .env.production
+             grep -Eq "^PROD_DB_PASSWORD=[[:xdigit:]]{64}$" .env.production
+             grep -Eq "^APP_SECRET_KEY=[[:xdigit:]]{64}$" .env.production
+             docker compose --env-file .env.production --profile production up -d --build app'

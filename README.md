@@ -55,6 +55,10 @@ Implemented milestones do **not** imply production authorization, legal accounti
 
 Development typically runs Python locally and PostgreSQL in Docker. Refer to the repository's existing Compose/env setup rather than creating a second one.
 
+The optional Hetzner deployment workflow and its loopback-only access and
+migration requirements are documented in
+[the deployment guide](docs/development/deploy-hetzner.md).
+
 ## Architecture
 
 A **pragmatic DDD / Ports & Adapters modular monolith**, inspired by *Architecture Patterns with Python* (Percival & Gregory):
