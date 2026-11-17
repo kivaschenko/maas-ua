@@ -23,6 +23,7 @@
           <a href="{{ url_for('imports.index') }}" {% if request.endpoint == 'imports.index' %}aria-current="page"{% endif %}>Головна</a>
           <a href="{{ url_for('imports.new') }}" {% if request.endpoint in ('imports.new', 'imports.upload', 'imports.preview', 'imports.result') %}aria-current="page"{% endif %}>Надходження</a>
           <a href="{{ url_for('transfers.new') }}" {% if request.endpoint in ('transfers.new', 'transfers.upload', 'transfers.preview', 'transfers.result') %}aria-current="page"{% endif %}>Переміщення</a>
+          <a href="{{ url_for('write_offs.new') }}">Списання</a>
           <a href="{{ url_for('inventory.search') }}" {% if request.endpoint in ('inventory.search', 'inventory.asset') %}aria-current="page"{% endif %}>Пошук майна</a>
           <a href="{{ url_for('inventory.balances') }}" {% if request.endpoint == 'inventory.balances' %}aria-current="page"{% endif %}>Залишки та оцінка</a>
         </nav>

@@ -15,10 +15,13 @@ from maas_ua.adapters.receipt_import_reader import SqlAlchemyReceiptImportReader
 from maas_ua.adapters.sqlalchemy import SqlAlchemyUnitOfWork
 from maas_ua.adapters.transfer_import_memory import MemoryTransferPreviewStore
 from maas_ua.adapters.transfer_import_reader import SqlAlchemyTransferImportReader
+from maas_ua.adapters.write_off_import_memory import MemoryWriteOffPreviewStore
+from maas_ua.adapters.write_off_import_reader import SqlAlchemyWriteOffImportReader
 from maas_ua.bootstrap import make_session_factory
 from maas_ua.entrypoints.imports import blueprint
 from maas_ua.entrypoints.inventory import blueprint as inventory_blueprint
 from maas_ua.entrypoints.transfers import blueprint as transfers_blueprint
+from maas_ua.entrypoints.write_offs import blueprint as write_offs_blueprint
 from maas_ua.service_layer.receipt_imports import (
     PreviewBusy,
     PreviewConsumed,
@@ -26,6 +29,7 @@ from maas_ua.service_layer.receipt_imports import (
     ReceiptImportCoordinator,
 )
 from maas_ua.service_layer.transfer_imports import TransferImportCoordinator
+from maas_ua.service_layer.write_off_imports import WriteOffImportCoordinator
 
 
 class _PrivateAccessLog(logging.Filter):
@@ -40,7 +44,7 @@ class _PrivateAccessLog(logging.Filter):
         return True
 
 
-def create_app(config=None, *, imports=None, inventory=None, transfers=None):
+def create_app(config=None, *, imports=None, inventory=None, transfers=None, write_offs=None):
     if os.environ.get("WEB_CONCURRENCY", "1") != "1":
         raise ValueError("in-memory imports require a single local application process")
     app = Flask(__name__)
@@ -71,6 +75,12 @@ def create_app(config=None, *, imports=None, inventory=None, transfers=None):
         transfers = TransferImportCoordinator(
             SqlAlchemyTransferImportReader(factory), lambda: SqlAlchemyUnitOfWork(factory), MemoryTransferPreviewStore()
         )
+    if write_offs is None and factory is not None:
+        write_offs = WriteOffImportCoordinator(
+            SqlAlchemyWriteOffImportReader(factory), lambda: SqlAlchemyUnitOfWork(factory), MemoryWriteOffPreviewStore()
+        )
+    app.extensions["write_off_imports"] = write_offs
+    app.register_blueprint(write_offs_blueprint)
     app.extensions["transfer_imports"] = transfers
     app.extensions["receipt_imports"] = imports
     app.extensions["inventory_reader"] = inventory

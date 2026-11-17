@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block lang %}uk{% endblock %}
+{% block title %}Результат списання · MAAS-UA{% endblock %}
+{% block content %}
+<h1>{{ {'registered': 'Списання зареєстровано', 'already_registered': 'Списання вже зареєстровано', 'rejected': 'Списання відхилено', 'retryable': 'Результат потребує перевірки'}.get(result.status) }}</h1>
+{% set issues = result.issues %}{% include "write_offs/issues.html" %}
+{% if result.write_off_id %}<p>Акт: {{ result.document_number }}. Дата прийняття до обліку: {{ result.effective_date }}.</p><p>Ідентифікатор документа: {{ result.write_off_id }}. Кількість одиниць: {{ result.asset_ids | length }}.</p>
+<p>Походження та первісна вартість збережені. Фінансові проведення не створено. Останній утримувач є історичним свідченням. Перегляньте історію на потрібну дату:</p><ul>{% for id in result.asset_ids %}<li><a href="{{ url_for('inventory.asset', asset_id=id) }}">Картка майна {{ loop.index }}</a></li>{% endfor %}</ul>{% endif %}
+{% if result.acquisition_values %}<p>Первісна вартість придбання списаного майна (не фінансовий баланс і не розрахунок витрат): {% for money in result.acquisition_values %}{{ money.amount }} {{ money.currency }}{% if not loop.last %}; {% endif %}{% endfor %}.</p>{% endif %}
+{% if result.status == 'retryable' %}<form method="post" action="{{ url_for('write_offs.confirm', preview_id=preview_id) }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button>Повторити перевірку та підтвердження</button></form>{% endif %}
+<form method="post" action="{{ url_for('write_offs.discard', preview_id=preview_id) }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button>Закрити</button></form>
+{% endblock %}
